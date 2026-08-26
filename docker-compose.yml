@@ -1,0 +1,36 @@
+# Local dev services. Prod uses Neon (Postgres) + Resend (email).
+# See docs/architecture.md for the rationale.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: medium-alt-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: medium
+      POSTGRES_PASSWORD: medium
+      POSTGRES_DB: medium_alt
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medium -d medium_alt"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: medium-alt-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI + HTTP API (used by E2E tests)
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+volumes:
+  postgres_data:

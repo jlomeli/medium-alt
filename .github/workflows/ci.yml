@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: typecheck + lint + unit + api
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: medium
+          POSTGRES_PASSWORD: medium
+          POSTGRES_DB: medium_alt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U medium -d medium_alt"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1025:1025
+          - 8025:8025
+
+    env:
+      DATABASE_URL: postgresql://medium:medium@localhost:5432/medium_alt?schema=public
+      DIRECT_URL: postgresql://medium:medium@localhost:5432/medium_alt?schema=public
+      AUTH_SECRET: ci-test-secret-not-real-do-not-use
+      AUTH_URL: http://localhost:3000
+      AUTH_TRUST_HOST: "true"
+      SMTP_HOST: localhost
+      SMTP_PORT: "1025"
+      EMAIL_FROM: "Medium-Alt CI <ci@medium-alt.local>"
+      E2E_MAILPIT_URL: http://localhost:8025
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate + migrate
+        run: |
+          pnpm prisma generate
+          pnpm prisma migrate deploy || pnpm prisma db push
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: API tests
+        run: pnpm exec playwright test --project=api
+
+      - name: Build (smoke)
+        run: pnpm build

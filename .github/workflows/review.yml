@@ -1,0 +1,88 @@
+name: Agentic review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# NOTE: this workflow is a skeleton. The context-bundle script and the
+# Claude prompt are the *actual* practice surface — see
+# .github/review/build-context.sh and .github/review/prompts/. Iterate on
+# both across the first several PRs before splitting into multi-agent
+# review (see docs/architecture.md).
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build context bundle
+        id: ctx
+        run: |
+          chmod +x .github/review/build-context.sh
+          .github/review/build-context.sh > /tmp/context.md
+          echo "context_path=/tmp/context.md" >> "$GITHUB_OUTPUT"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREVIEW_URL: ${{ github.event.pull_request.head.repo.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Invoke Claude
+        id: claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY secret not set — skipping. Add it with 'gh secret set ANTHROPIC_API_KEY'."
+            exit 0
+          fi
+          # Build the payload from the system prompt + context bundle + user turn.
+          SYSTEM_PROMPT=$(cat .github/review/prompts/single-reviewer.md)
+          USER_TURN=$(cat /tmp/context.md)
+          jq -n \
+            --arg model "claude-opus-4-7" \
+            --arg system "$SYSTEM_PROMPT" \
+            --arg user "$USER_TURN" \
+            '{
+              model: $model,
+              max_tokens: 4096,
+              system: $system,
+              messages: [{ role: "user", content: $user }]
+            }' > /tmp/payload.json
+
+          curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            --data @/tmp/payload.json > /tmp/response.json
+
+          jq -r '.content[0].text' /tmp/response.json > /tmp/review.md
+          cat /tmp/review.md
+
+      - name: Post review as PR comment
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -s /tmp/review.md ]; then
+            echo "No review output — skipping comment."
+            exit 0
+          fi
+          gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md

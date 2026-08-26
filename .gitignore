@@ -1,0 +1,54 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# next
+.next/
+out/
+next-env.d.ts
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# builds
+build/
+dist/
+
+# turbo / caches
+.turbo/
+.cache/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+
+# testing
+coverage/
+playwright-report/
+test-results/
+blob-report/
+e2e/.auth/
+e2e/.tmp/
+playwright/.cache/
+
+# prisma
+prisma/*.db
+prisma/*.db-journal
+
+# uploads (dev only)
+public/uploads/
+tsconfig.tsbuildinfo
