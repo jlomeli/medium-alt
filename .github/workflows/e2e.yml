@@ -11,6 +11,16 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+# The repo's default GITHUB_TOKEN permission is `read` (contents-only). The
+# wait-for-vercel-preview action polls /repos/:owner/:repo/deployments which
+# requires `deployments: read`. Without this block every poll 401s and the job
+# times out after 10 minutes.
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+  statuses: read
+
 jobs:
   wait-for-preview:
     name: Wait for Vercel preview
