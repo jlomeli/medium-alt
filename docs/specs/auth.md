@@ -1,6 +1,6 @@
 # Spec: Authentication
 
-Tracking: #TBD
+Tracking: #3
 Status: draft
 Owner: jlomeli
 
@@ -162,6 +162,22 @@ Components (`components/auth/`):
 
 All fields have visible labels. `<AuthForm>` uses `<form>` semantics so tests
 query `getByRole('form', { name: ... })` and inputs via `getByLabel`.
+
+## Testing seams
+
+Two behaviors — reset-token expiry, and any other future time-dependent
+assertion — need a way for E2E tests to fast-forward without wall-clock waits.
+
+- `POST /api/test/password-reset/expire { token }` — dev/test-only Route
+  Handler that marks the matching `PasswordResetToken.expiresAt` in the past.
+  Guarded: **must return 404 unless `NODE_ENV !== "production"` AND
+  `process.env.E2E === "1"`**. CI sets `E2E=1` in the E2E workflow env; the
+  Vercel preview build sets it too so preview traffic can hit it.
+- Rationale over Prisma direct-writes from tests: keeps the E2E process
+  hermetic (no DB creds in the runner), keeps the seam observable in HAR/traces.
+
+Add more seams here as future features need them; each one must be gated the
+same way.
 
 ## E2E test plan
 
