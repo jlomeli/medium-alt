@@ -38,17 +38,15 @@ export const test = base.extend<Fixtures>({
     await use(user);
   },
 
-  loggedInPage: async ({ page, testUser }, use) => {
+  loggedInPage: async ({ page: _page, testUser: _testUser }, _use) => {
     // TODO(auth-feature): once /api/auth/login exists, sign in via API and
-    // seed the storageState. Until then this fixture will fail loudly on use
+    // seed the storageState. Until then this fixture fails loudly on first use
     // so tests written before auth exists can't silently pretend to be logged
     // in. See docs/specs/auth.md.
     throw new Error(
       "loggedInPage fixture not yet wired — the auth feature has not landed. " +
         "See docs/specs/auth.md.",
     );
-    // eslint-disable-next-line @typescript-eslint/no-unreachable
-    await use(page);
   },
 
   mailpit: async ({}, use) => {
