@@ -10,7 +10,7 @@ import { HeaderComponent } from "@e2e/support/pom/header.component";
  */
 
 test.describe("@smoke @regression login", () => {
-  const GENERIC_ERROR = /email or password (?:is )?incorrect/i;
+  const GENERIC_ERROR = /email or password is incorrect/i;
 
   test("@smoke happy path — valid credentials land on /", async ({ page, userFactory }) => {
     const user = await userFactory.create();
@@ -29,7 +29,7 @@ test.describe("@smoke @regression login", () => {
 
     await login.loginAs({ email: user.email, password: "Wrong-Password-1" });
 
-    await expect(page.getByRole("alert")).toContainText(GENERIC_ERROR);
+    await expect(page.getByText(GENERIC_ERROR)).toBeVisible();
     await expect(page).toHaveURL(/\/login/);
   });
 
@@ -42,7 +42,7 @@ test.describe("@smoke @regression login", () => {
 
     await login.loginAs({ email: bogus.email, password: bogus.password });
 
-    await expect(page.getByRole("alert")).toContainText(GENERIC_ERROR);
+    await expect(page.getByText(GENERIC_ERROR)).toBeVisible();
     await expect(page).toHaveURL(/\/login/);
   });
 

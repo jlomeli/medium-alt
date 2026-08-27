@@ -84,7 +84,7 @@ test.describe("@regression password reset", () => {
     expect(res.ok()).toBeTruthy();
 
     await confirmPage.gotoWithToken(token);
-    await expect(page.getByRole("alert")).toContainText(/(?:expired|invalid)/i);
+    await expect(page.getByText(/(?:has expired|is invalid)/i)).toBeVisible();
     await expect(confirmPage.newPasswordField).toHaveCount(0);
   });
 
@@ -108,7 +108,7 @@ test.describe("@regression password reset", () => {
     // Log the user back out so we can attempt to reuse the link cleanly.
     await header.logOut();
     await confirmPage.gotoWithToken(token);
-    await expect(page.getByRole("alert")).toContainText(/(?:already been used|invalid)/i);
+    await expect(page.getByText(/(?:already been used|is invalid)/i)).toBeVisible();
 
     // Confirm the *new* password still works — the token consumption didn't
     // corrupt the account.

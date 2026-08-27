@@ -41,8 +41,13 @@ jobs:
       AUTH_SECRET: ci-test-secret-not-real-do-not-use
       AUTH_URL: http://localhost:3000
       AUTH_TRUST_HOST: "true"
-      SMTP_HOST: localhost
+      # 127.0.0.1 not localhost — nodemailer prefers IPv6 which Mailpit
+      # doesn't bind to, wasting the SMTP connect timeout on each send.
+      SMTP_HOST: 127.0.0.1
       SMTP_PORT: "1025"
+      # Enables env-gated dev/test seams under /api/test/* — see
+      # docs/specs/auth.md §Testing seams.
+      E2E: "1"
       EMAIL_FROM: "Medium-Alt CI <ci@medium-alt.local>"
       E2E_MAILPIT_URL: http://localhost:8025
       NEXT_PUBLIC_APP_URL: http://localhost:3000

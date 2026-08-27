@@ -38,15 +38,28 @@ export const test = base.extend<Fixtures>({
     await use(user);
   },
 
-  loggedInPage: async ({ page: _page, testUser: _testUser }, _use) => {
-    // TODO(auth-feature): once /api/auth/login exists, sign in via API and
-    // seed the storageState. Until then this fixture fails loudly on first use
-    // so tests written before auth exists can't silently pretend to be logged
-    // in. See docs/specs/auth.md.
-    throw new Error(
-      "loggedInPage fixture not yet wired — the auth feature has not landed. " +
-        "See docs/specs/auth.md.",
-    );
+  loggedInPage: async ({ browser, request }, use) => {
+    // Fresh user + fresh browser context per test. Per-worker `storageState`
+    // caching is a Phase-2 optimization; keeping the shape simple here so the
+    // auth surface stays honest during the initial impl.
+    const factory = new UserFactory(request);
+    const user = await factory.create();
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    // Sign in via Auth.js Credentials by driving the /login form once. Slower
+    // than a direct CSRF-token POST, but portable across Auth.js version bumps
+    // and hermetic: no shared secrets, no direct DB writes.
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(user.email);
+    await page.getByLabel("Password", { exact: true }).fill(user.password);
+    await page.getByRole("button", { name: "Log in" }).click();
+    await page.waitForURL("/");
+
+    await use(page);
+
+    await context.close();
   },
 
   mailpit: async ({}, use) => {

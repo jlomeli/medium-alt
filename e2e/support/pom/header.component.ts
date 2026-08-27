@@ -31,6 +31,15 @@ export class HeaderComponent {
 
   async logOut(): Promise<void> {
     await this.openMenu();
-    await this.logOutButton.click();
+    // The "Log out" menuitem is inside a `<form action="/api/logout">`. Wait
+    // for that form's 303 response to land before treating logout as done —
+    // otherwise subsequent goto() calls race the Set-Cookie header.
+    await Promise.all([
+      this.page.waitForResponse(
+        (res) => res.url().endsWith("/api/logout") && res.request().method() === "POST",
+      ),
+      this.logOutButton.click(),
+    ]);
+    await this.page.waitForURL("/");
   }
 }

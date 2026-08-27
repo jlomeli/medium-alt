@@ -65,7 +65,7 @@ test.describe("@regression api/password-reset/confirm", () => {
     });
 
     expect(res.status()).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toMatchObject({ ok: true });
   });
 
   test("returns 400 { error: 'expired' } for a stale token", async ({

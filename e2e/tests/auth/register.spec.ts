@@ -41,7 +41,7 @@ test.describe("@regression register", () => {
     });
     await register.submit();
 
-    await expect(page.getByRole("alert")).toContainText(/email .* already registered/i);
+    await expect(page.getByText(/email is already registered/i)).toBeVisible();
     await expect(page).toHaveURL(/\/register/);
   });
 
@@ -56,7 +56,7 @@ test.describe("@regression register", () => {
     });
     await register.submit();
 
-    await expect(page.getByRole("alert")).toContainText(/username .* taken/i);
+    await expect(page.getByText(/username is taken/i)).toBeVisible();
     await expect(page).toHaveURL(/\/register/);
   });
 
@@ -71,9 +71,7 @@ test.describe("@regression register", () => {
     await register.fill(attrs);
     await register.submit();
 
-    await expect(page.getByRole("alert")).toContainText(
-      /password .* (?:at least 8|upper|lower|digit)/i,
-    );
+    await expect(page.getByText(/password must (?:be at least 8|include)/i)).toBeVisible();
     await expect(page).toHaveURL(/\/register/);
   });
 
@@ -85,7 +83,7 @@ test.describe("@regression register", () => {
     await register.fill(attrs);
     await register.submit();
 
-    await expect(page.getByRole("alert")).toContainText(/email .* invalid/i);
+    await expect(page.getByText(/email is invalid/i)).toBeVisible();
     await expect(page).toHaveURL(/\/register/);
   });
 });

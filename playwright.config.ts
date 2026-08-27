@@ -77,5 +77,8 @@ export default defineConfig({
         timeout: 120_000,
         stdout: "pipe",
         stderr: "pipe",
+        // Enables env-gated test seams under /api/test/* — see
+        // docs/specs/auth.md §Testing seams.
+        env: { E2E: "1" },
       },
 });

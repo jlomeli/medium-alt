@@ -2,18 +2,13 @@ import type { APIRequestContext } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 
 /**
- * User factory — the first of what will be a small family of factories
- * (Article, Comment, Tag). Modeled on Rails' factory_bot and the TS fishery
- * library.
+ * User factory — first of a small family (Article, Comment, Tag will follow).
+ * Modeled on factory_bot / fishery.
  *
- * Pattern:
- *   - `.build()` returns a valid, unique-by-default in-memory user (no DB hit).
- *   - `.create()` materializes it via the app's /api/register endpoint.
- *   - `.createDirect()` will write straight through Prisma (fast path for
- *     bulk seeding — added when the auth feature lands and we know the
- *     password-hash shape).
+ *   - `.build()` — valid unique-by-default in-memory attrs (no DB hit).
+ *   - `.create()` — persists via `POST /api/register` and returns the created user.
  *
- * See docs/CODING_STANDARDS.md §Testing for the full policy.
+ * See docs/CODING_STANDARDS.md §Testing.
  */
 
 export type UserAttrs = {
@@ -46,12 +41,15 @@ export class UserFactory {
   }
 
   async create(overrides: Partial<UserAttrs> = {}): Promise<CreatedUser> {
-    // TODO(auth-feature): swap this stub for a real POST /api/register call
-    // once the register endpoint exists. See docs/specs/auth.md.
-    const _attrs = this.build(overrides);
-    throw new Error(
-      "UserFactory.create() not yet wired — /api/register does not exist. " +
-        "See docs/specs/auth.md.",
-    );
+    const attrs = this.build(overrides);
+    const res = await this.api.post("/api/register", { data: attrs });
+    if (!res.ok()) {
+      const body = await res.text();
+      throw new Error(
+        `UserFactory.create() failed: POST /api/register ${res.status()} — ${body}`,
+      );
+    }
+    const json = (await res.json()) as { user: { id: string } };
+    return { ...attrs, id: json.user.id };
   }
 }
