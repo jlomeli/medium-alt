@@ -5,10 +5,11 @@
  * Anti-enumeration: the response, latency, and side-effects must be
  * indistinguishable from the outside.
  *
- * Timing: the SMTP send happens in `after()` so both the registered and
- * unknown-email paths return after roughly one DB round-trip. The remaining
- * delta (one INSERT vs. none) is small relative to network jitter; if we
- * ever need to close it further, we can add a fake write on the miss path.
+ * Timing: both branches do exactly one DB read (`findUnique`) before
+ * responding. The registered-email branch's token INSERT and SMTP send both
+ * happen inside `after()` so they never contribute to the wall-clock delta
+ * an attacker can measure. `after()` is guaranteed to run on Vercel after
+ * the response is flushed; on dev it just fires on the event loop.
  */
 import { NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
@@ -29,29 +30,26 @@ export async function POST(req: Request) {
   const user = await db.user.findUnique({ where: { email }, select: { id: true } });
 
   if (user) {
-    const { raw, hash } = generate();
-    await db.passwordResetToken.create({
-      data: {
-        tokenHash: hash,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
-      },
-    });
-
+    const userId = user.id;
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL ?? process.env.AUTH_URL ?? "http://localhost:3000";
-    const link = `${appUrl}/password-reset/confirm?token=${raw}`;
 
-    // Deferred so the response returns before the SMTP round-trip. Runs after
-    // the response is flushed; on Vercel this is on the same invocation, on
-    // dev it just fires-and-forgets on the event loop.
     after(async () => {
       try {
+        const { raw, hash } = generate();
+        await db.passwordResetToken.create({
+          data: {
+            tokenHash: hash,
+            userId,
+            expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
+          },
+        });
+        const link = `${appUrl}/password-reset/confirm?token=${raw}`;
         await sendEmail({ to: email, ...passwordResetEmail(link) });
       } catch (err) {
-        // Silent — we don't want a broken SMTP relay to signal anything back
-        // to the client. Logged for operators.
-        console.error("[password-reset] sendEmail failed", err);
+        // Silent — a broken SMTP relay or DB write must not surface any
+        // distinguishable signal to the client. Logged for operators.
+        console.error("[password-reset] request-after failed", err);
       }
     });
   }
