@@ -1,13 +1,19 @@
 import { test, expect } from "@e2e/support/fixtures";
 import { registerSchema } from "@/lib/validation/auth";
+import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
+import * as OpenApiParser from "@readme/openapi-parser";
 
 /**
  * Acceptance criteria from docs/specs/api-docs.md.
  *
- * All tests are currently RED — `/api/openapi.json` doesn't exist yet.
+ * Two validators do the heavy lifting:
+ *   - `@readme/openapi-parser` for the OpenAPI 3.1 document itself — it
+ *     dereferences `$ref`s and validates against the 3.1 spec's JSON Schema.
+ *   - Ajv (draft 2020-12, matching OpenAPI 3.1's schema dialect) for
+ *     validating specific payloads against emitted request/response schemas.
  */
 
-/** Minimal typed view of what we assert on inside the document. */
 interface OpenApiDoc {
   openapi: string;
   info: { title: string; version: string };
@@ -41,13 +47,24 @@ async function fetchDoc(api: import("@playwright/test").APIRequestContext): Prom
 }
 
 test.describe("@smoke @api openapi document", () => {
-  test("GET /api/openapi.json returns valid OpenAPI 3.1 JSON", async ({ api }) => {
+  test("GET /api/openapi.json returns a document that validates against the OpenAPI 3.1 spec", async ({
+    api,
+  }) => {
     const { status, contentType, body } = await fetchDoc(api);
     expect(status).toBe(200);
     expect(contentType).toContain("application/json");
     expect(body.openapi).toBe("3.1.0");
-    expect(body.info.title).toBeTruthy();
-    expect(body.info.version).toBeTruthy();
+
+    // Structural validation. `validate` throws on any spec violation and
+    // includes the offending path in the error message. Uses the OpenAPI
+    // 3.1 JSON Schema internally; a mistranslation upstream (bad `type`,
+    // missing `responses`, invalid `$ref`, etc.) fails here — no more
+    // "green test on structurally broken doc" possible.
+    // The parser mutates via dereferencing; pass a deep clone so the doc
+    // returned by our endpoint is not depended on by later assertions.
+    await expect(
+      OpenApiParser.validate(JSON.parse(JSON.stringify(body))),
+    ).resolves.toBeTruthy();
   });
 
   test("every custom endpoint appears with a summary + request + 2xx response schema", async ({
@@ -89,29 +106,63 @@ test.describe("@smoke @api openapi document", () => {
     }
   });
 
-  test("RegisterInput round-trips: doc's request schema accepts the same payloads Zod does", async ({
+  test("RegisterInput round-trips: emitted JSON Schema accepts what Zod accepts and rejects what Zod rejects", async ({
     api,
     userFactory,
   }) => {
+    // Dereference the whole doc so any `$ref` inside `docSchema` (e.g. to
+    // `#/components/schemas/...`) resolves to inline structure Ajv can
+    // compile. Deep clone first — `dereference` mutates.
     const { body } = await fetchDoc(api);
-    const registerOp = body.paths["/api/register"]?.["post"];
-    const docSchema = registerOp?.requestBody?.content?.["application/json"]?.schema as {
-      required?: string[];
-      properties?: Record<string, unknown>;
-    };
+    const doc = (await OpenApiParser.dereference(
+      JSON.parse(JSON.stringify(body)) as OpenApiDoc,
+    )) as OpenApiDoc;
+
+    const docSchema = doc.paths["/api/register"]?.["post"]?.requestBody?.content?.[
+      "application/json"
+    ]?.schema as Record<string, unknown> | undefined;
     expect(docSchema).toBeDefined();
 
-    // The generator should expose the same required-fields set as the Zod
-    // schema. Password can be top-level required in the doc; Zod also treats
-    // it required. `name` is optional in both.
-    expect(new Set(docSchema.required)).toEqual(new Set(["email", "username", "password"]));
-    expect(Object.keys(docSchema.properties ?? {})).toEqual(
-      expect.arrayContaining(["email", "username", "password", "name"]),
-    );
+    // Ajv 2020 = JSON Schema draft 2020-12 = OpenAPI 3.1's schema dialect.
+    const ajv = new Ajv2020({ strict: false, allErrors: true });
+    addFormats(ajv);
+    const validateDoc = ajv.compile(docSchema!);
 
-    // Live cross-check: a valid factory payload is accepted by the Zod schema
-    // that generated the doc.
-    const attrs = userFactory.build();
-    expect(registerSchema.safeParse(attrs).success).toBe(true);
+    // POSITIVE — the emitted schema must accept a valid factory payload,
+    // and Zod must accept it too. Anything else means drift between the
+    // spec generator and the runtime validator.
+    const good = userFactory.build();
+    expect(registerSchema.safeParse(good).success, "Zod rejected valid factory input").toBe(true);
+    expect(validateDoc(good), `emitted schema rejected valid input: ${ajv.errorsText(validateDoc.errors)}`)
+      .toBe(true);
+
+    // NEGATIVE — cases that violate each Zod constraint. Both validators
+    // must reject the same inputs. If Zod says password must be ≥ 8 chars
+    // with upper/lower/digit but the emitted JSON Schema only enforces
+    // `minLength: 8`, the "short" case would slip through — this table
+    // catches that drift.
+    const negatives: Array<{ label: string; payload: Record<string, unknown> }> = [
+      { label: "malformed email", payload: { ...good, email: "not-an-email" } },
+      { label: "short password (< 8)", payload: { ...good, password: "aA1x" } },
+      {
+        label: "password missing digit",
+        payload: { ...good, password: "NoDigitsHere" },
+      },
+      { label: "missing password", payload: { email: good.email, username: good.username } },
+      { label: "too-short username", payload: { ...good, username: "ab" } },
+    ];
+    for (const { label, payload } of negatives) {
+      const zodOk = registerSchema.safeParse(payload).success;
+      const docOk = validateDoc(payload);
+      expect(
+        zodOk,
+        `Zod ${zodOk ? "unexpectedly accepted" : "correctly rejected"} ${label}`,
+      ).toBe(false);
+      expect(
+        docOk,
+        `emitted schema ${docOk ? "unexpectedly accepted" : "correctly rejected"} ${label} — ` +
+          `Zod-to-OpenAPI drift for this constraint`,
+      ).toBe(false);
+    }
   });
 });
