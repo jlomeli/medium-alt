@@ -1,6 +1,6 @@
 # Spec: API documentation (OpenAPI + Scalar)
 
-Tracking: #TBD
+Tracking: #5
 Status: draft
 Owner: jlomeli
 
