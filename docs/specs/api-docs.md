@@ -48,6 +48,13 @@ Each becomes one Playwright test.
   { level: 1 })`.
 - [ ] Schema-checked-response smoke: the `POST /api/register` E2E test
   parses the response body against `RegisterResponseSchema` and it passes.
+- [ ] **Coverage enforcement.** A test scans `app/api/**/route.ts` and fails
+  CI if any route lacks either a `registerRoute(...)` entry in
+  `lib/openapi/routes.ts` or an explicit allowlist entry (with rationale)
+  in `e2e/api/openapi/coverage.spec.ts`. A parallel test fails CI if the
+  allowlist references a route that no longer exists on disk. Combined,
+  these two make it impossible to ship a new endpoint that silently drops
+  out of the spec.
 
 ## Non-goals
 
