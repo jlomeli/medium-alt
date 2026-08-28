@@ -1,11 +1,16 @@
 /**
  * DEV/E2E-ONLY test seam.
  *
- * Documented in docs/specs/auth.md §Testing seams. Returns 404 unless
- *   - process.env.E2E === "1", AND
- *   - VERCEL_ENV is unset or "preview" (never "production")
- * so it can never be hit from a real production deployment. Vercel preview
- * deployments must set E2E=1 in project env vars for this seam to activate.
+ * Documented in docs/specs/auth.md §Testing seams. Guard is belt-and-
+ * suspenders — a non-Vercel deployment with `NODE_ENV=production` and a
+ * stray `E2E=1` would otherwise expose an unauthenticated endpoint that
+ * can invalidate any reset token an attacker holds.
+ *
+ * The seam is enabled iff:
+ *   - `E2E === "1"`, AND
+ *   - `VERCEL_ENV !== "production"`, AND
+ *   - `NODE_ENV !== "production"` UNLESS `VERCEL_ENV === "preview"`
+ *     (Vercel preview builds always set `NODE_ENV=production`).
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -14,9 +19,14 @@ import { hash as hashToken } from "@/lib/auth/reset-token";
 
 const inputSchema = z.object({ token: z.string().min(1) });
 
-function isEnabled() {
-  const isProd = process.env.VERCEL_ENV === "production";
-  return !isProd && process.env.E2E === "1";
+function isEnabled(): boolean {
+  if (process.env.E2E !== "1") return false;
+  // Explicit Vercel production always disabled.
+  if (process.env.VERCEL_ENV === "production") return false;
+  // Vercel preview is the one case where NODE_ENV=production is allowed.
+  if (process.env.VERCEL_ENV === "preview") return true;
+  // Any other environment: refuse if NODE_ENV signals production.
+  return process.env.NODE_ENV !== "production";
 }
 
 export async function POST(req: Request) {

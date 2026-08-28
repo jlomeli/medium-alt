@@ -15,14 +15,29 @@ function getTransport(): nodemailer.Transporter {
   if (cached) return cached;
   const host = process.env.SMTP_HOST ?? "127.0.0.1";
   const port = Number(process.env.SMTP_PORT ?? "1025");
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  // TLS profile depends on the environment. In dev/CI the target is Mailpit,
+  // which has no TLS support at all — enabling STARTTLS negotiation there
+  // stalls the send. In production the target is a real relay (Resend etc.)
+  // where the reset-token URL must never traverse the wire in plaintext.
+  //
+  // Rules:
+  //   - Port 465 → implicit TLS (SMTPS).
+  //   - Otherwise, require STARTTLS in production; ignore it locally.
+  const isProd = process.env.NODE_ENV === "production";
+  const secure = port === 465;
+
   cached = nodemailer.createTransport({
     host,
     port,
-    secure: false,
+    secure,
+    requireTLS: isProd && !secure,
+    ignoreTLS: !isProd && !secure,
+    auth: user && pass ? { user, pass } : undefined,
     // Short conservative timeouts. Locally Mailpit responds within
     // milliseconds; anything above 5s is a real problem, not a slow SMTP.
-    // Also disables the STARTTLS negotiation attempt Mailpit doesn't support.
-    ignoreTLS: true,
     connectionTimeout: 5_000,
     greetingTimeout: 5_000,
     socketTimeout: 5_000,

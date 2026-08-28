@@ -38,25 +38,41 @@ export const test = base.extend<Fixtures>({
     await use(user);
   },
 
-  loggedInPage: async ({ browser, request }, use) => {
-    // Fresh user + fresh browser context per test. Per-worker `storageState`
-    // caching is a Phase-2 optimization; keeping the shape simple here so the
-    // auth surface stays honest during the initial impl.
-    const factory = new UserFactory(request);
+  loggedInPage: async ({ browser, baseURL }, use) => {
+    // The framework rule (docs/CODING_STANDARDS.md §Testing) is: no test
+    // outside e2e/tests/auth/ may fill the /login form. This fixture wires
+    // the session via the Auth.js Credentials callback — no browser
+    // navigation to /login, no locators on password fields.
+    const context = await browser.newContext({ baseURL });
+    const factory = new UserFactory(context.request);
     const user = await factory.create();
 
-    const context = await browser.newContext();
+    // CSRF handshake: Auth.js requires a matching csrfToken in both the
+    // cookie jar and the POST body. The GET populates the cookie; the POST
+    // echoes the value back.
+    const csrfRes = await context.request.get("/api/auth/csrf");
+    if (!csrfRes.ok()) {
+      throw new Error(`csrf fetch failed: ${csrfRes.status()}`);
+    }
+    const { csrfToken } = (await csrfRes.json()) as { csrfToken: string };
+
+    const loginRes = await context.request.post("/api/auth/callback/credentials", {
+      form: {
+        csrfToken,
+        email: user.email,
+        password: user.password,
+        // Suppresses the 302 redirect Auth.js would normally issue so we get
+        // a JSON response and can assert the status.
+        json: "true",
+      },
+    });
+    if (!loginRes.ok()) {
+      throw new Error(
+        `credentials login failed: ${loginRes.status()} — ${await loginRes.text()}`,
+      );
+    }
+
     const page = await context.newPage();
-
-    // Sign in via Auth.js Credentials by driving the /login form once. Slower
-    // than a direct CSRF-token POST, but portable across Auth.js version bumps
-    // and hermetic: no shared secrets, no direct DB writes.
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(user.email);
-    await page.getByLabel("Password", { exact: true }).fill(user.password);
-    await page.getByRole("button", { name: "Log in" }).click();
-    await page.waitForURL("/");
-
     await use(page);
 
     await context.close();

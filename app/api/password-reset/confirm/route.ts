@@ -45,24 +45,40 @@ export async function POST(req: Request) {
 
   const passwordHash = await hashPassword(newPassword);
 
-  const [user] = await db.$transaction([
-    db.user.update({
+  // Atomic claim: `updateMany` with `usedAt: null` in WHERE guarantees at
+  // most one concurrent caller succeeds. Without this, two requests could
+  // pass the pre-check above and both proceed to update the user's password.
+  const result = await db.$transaction(async (tx) => {
+    const claimed = await tx.passwordResetToken.updateMany({
+      where: { id: row.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    if (claimed.count !== 1) {
+      // Another request beat us to this token — treat it as invalid, same
+      // response the pre-check would have produced.
+      return null;
+    }
+
+    const user = await tx.user.update({
       where: { id: row.userId },
       data: { passwordHash },
       select: { email: true },
-    }),
-    db.passwordResetToken.update({
-      where: { id: row.id },
-      data: { usedAt: new Date() },
-    }),
+    });
+
     // Invalidate any other in-flight tokens for this user.
-    db.passwordResetToken.updateMany({
+    await tx.passwordResetToken.updateMany({
       where: { userId: row.userId, usedAt: null, id: { not: row.id } },
       data: { usedAt: new Date() },
-    }),
-  ]);
+    });
+
+    return { email: user.email };
+  });
+
+  if (!result) {
+    return NextResponse.json({ error: "invalid" }, { status: 400 });
+  }
 
   // `email` is returned so the client can auto-sign-in via the Credentials
   // provider. It's the same email that hit /request, so no information leak.
-  return NextResponse.json({ ok: true, email: user.email });
+  return NextResponse.json({ ok: true, email: result.email });
 }

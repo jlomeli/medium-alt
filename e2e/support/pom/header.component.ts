@@ -4,8 +4,8 @@ import type { Page, Locator } from "@playwright/test";
  * Component Object for the site-wide header.
  *
  * The header is the auth-state indicator: signed-out shows "Log in" / "Sign up"
- * links; signed-in shows an account menu whose accessible name is the user's
- * display name and which contains a "Log out" button.
+ * links; signed-in shows an account menu whose accessible name is "Account"
+ * and which contains a "Log out" menuitem.
  *
  * Component Objects live under `support/pom/*.component.ts` and encapsulate a
  * cross-page fragment. See docs/CODING_STANDARDS.md §Testing.
@@ -31,15 +31,12 @@ export class HeaderComponent {
 
   async logOut(): Promise<void> {
     await this.openMenu();
-    // The "Log out" menuitem is inside a `<form action="/api/logout">`. Wait
-    // for that form's 303 response to land before treating logout as done —
-    // otherwise subsequent goto() calls race the Set-Cookie header.
-    await Promise.all([
-      this.page.waitForResponse(
-        (res) => res.url().endsWith("/api/logout") && res.request().method() === "POST",
-      ),
-      this.logOutButton.click(),
-    ]);
-    await this.page.waitForURL("/");
+    // The menuitem submits `<form action="/api/logout">` — POST → 303 → GET /.
+    // Wait on the "Log in" link (only rendered when the server-side auth()
+    // check sees no session) as the completion signal. That link's presence
+    // implies the follow-up GET / was made without the JWT cookie, so the
+    // cookie has been reliably cleared.
+    await this.logOutButton.click();
+    await this.logInLink.waitFor({ state: "visible" });
   }
 }
