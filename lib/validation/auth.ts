@@ -6,13 +6,22 @@
  */
 import { z } from "zod";
 
-/** min 8, must contain ≥1 upper, ≥1 lower, ≥1 digit. */
+/**
+ * min 8, must contain ≥1 upper, ≥1 lower, ≥1 digit.
+ *
+ * `.regex(...)` rather than `.refine(...)` so `zod-openapi` can emit the
+ * character-class rule as a JSON Schema `pattern`. `.refine()` is an
+ * arbitrary JS predicate — the OpenAPI emitter drops it silently, and the
+ * round-trip test in e2e/api/openapi/spec.spec.ts caught the drift. A
+ * single lookahead-based regex means one `pattern` in JSON Schema, and
+ * the emitted schema now accepts and rejects exactly what Zod does.
+ */
 export const passwordSchema = z
   .string()
   .min(8, { message: "Password must be at least 8 characters" })
-  .refine((s) => /[A-Z]/.test(s), { message: "Password must include an uppercase letter" })
-  .refine((s) => /[a-z]/.test(s), { message: "Password must include a lowercase letter" })
-  .refine((s) => /\d/.test(s), { message: "Password must include a digit" });
+  .regex(/^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)/, {
+    message: "Password must include an uppercase letter, a lowercase letter, and a digit",
+  });
 
 /** 3-30 chars, letters/digits/underscore/hyphen. */
 export const usernameSchema = z
