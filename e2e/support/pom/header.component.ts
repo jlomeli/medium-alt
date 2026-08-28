@@ -33,10 +33,17 @@ export class HeaderComponent {
     await this.openMenu();
     // The menuitem submits `<form action="/api/logout">` — POST → 303 → GET /.
     // Wait on the "Log in" link (only rendered when the server-side auth()
-    // check sees no session) as the completion signal. That link's presence
-    // implies the follow-up GET / was made without the JWT cookie, so the
-    // cookie has been reliably cleared.
+    // check sees no session) as the completion signal.
     await this.logOutButton.click();
     await this.logInLink.waitFor({ state: "visible" });
+    // Belt-and-suspenders: Chromium under parallel-workers load has been
+    // observed occasionally missing the Set-Cookie clear from the 303
+    // response, leaving a valid-looking JWT in the context jar even though
+    // the server-rendered Header already reflects the signed-out state.
+    // Subsequent goto() calls then race the stale cookie. The endpoint's
+    // Set-Cookie is unchanged — this only guarantees the test's precondition.
+    await this.page.context().clearCookies({
+      name: /^(?:__Secure-)?authjs\.session-token$/,
+    });
   }
 }

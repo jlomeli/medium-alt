@@ -71,6 +71,21 @@ export const test = base.extend<Fixtures>({
         `credentials login failed: ${loginRes.status()} — ${await loginRes.text()}`,
       );
     }
+    // Auth.js can respond 200 with { url: "/error?..." } when the credentials
+    // authorize() returns null — the status alone isn't a success signal. The
+    // authoritative check is that the JWT session cookie now exists in the
+    // context jar. Its name depends on protocol (Vercel preview is HTTPS →
+    // __Secure- prefix).
+    const cookies = await context.cookies();
+    const hasJwt = cookies.some(
+      (c) => c.name === "authjs.session-token" || c.name === "__Secure-authjs.session-token",
+    );
+    if (!hasJwt) {
+      const body = await loginRes.text();
+      throw new Error(
+        `credentials login did not set a session cookie — response body: ${body}`,
+      );
+    }
 
     const page = await context.newPage();
     await use(page);

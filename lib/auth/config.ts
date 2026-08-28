@@ -11,7 +11,7 @@ import NextAuth, { type DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { db } from "@/lib/db";
-import { verifyPassword } from "@/lib/auth/password";
+import { verifyPassword, dummyPasswordHash } from "@/lib/auth/password";
 import { loginSchema } from "@/lib/validation/auth";
 
 declare module "next-auth" {
@@ -41,10 +41,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const { email, password } = parsed.data;
         const user = await db.user.findUnique({ where: { email } });
-        if (!user?.passwordHash) return null;
 
-        const ok = await verifyPassword(user.passwordHash, password);
-        if (!ok) return null;
+        // Constant-time enumeration guard: always run argon2.verify — either
+        // against the user's real hash or against a shared dummy hash for
+        // unknown emails. Without this, an attacker can distinguish
+        // registered emails from unknown ones by the ~100-250ms Argon2 cost.
+        const hashToVerify = user?.passwordHash ?? (await dummyPasswordHash());
+        const ok = await verifyPassword(hashToVerify, password);
+
+        if (!user?.passwordHash || !ok) return null;
 
         return {
           id: user.id,

@@ -19,3 +19,21 @@ export async function verifyPassword(hash: string, plain: string): Promise<boole
     return false;
   }
 }
+
+/**
+ * Placeholder hash used by the login flow when the requested email doesn't
+ * exist. Running argon2.verify against it makes the wall-clock cost of a
+ * "no such user" login attempt match that of a "wrong password" attempt, so
+ * timing analysis can't distinguish registered emails from unknown ones.
+ *
+ * The hash's plaintext is never a valid password — verify against it always
+ * returns false. Lazily computed on first use so process startup stays cheap,
+ * then cached at module scope.
+ */
+let dummyHashPromise: Promise<string> | null = null;
+export function dummyPasswordHash(): Promise<string> {
+  if (!dummyHashPromise) {
+    dummyHashPromise = hashPassword("dummy-never-matches-a-real-password");
+  }
+  return dummyHashPromise;
+}
