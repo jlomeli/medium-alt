@@ -68,7 +68,9 @@ test.describe("@regression api/password-reset/confirm", () => {
     expect(await res.json()).toMatchObject({ ok: true });
   });
 
-  test("returns 400 { error: 'expired' } for a stale token", async ({
+  // Same reason as the UI expiration test: drives the seam that's off in
+  // Vercel production, so nightly-full (targeting the prod URL) skips it.
+  test("@needs-test-seam returns 400 { error: 'expired' } for a stale token", async ({
     api,
     userFactory,
     mailpit,

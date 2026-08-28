@@ -64,7 +64,14 @@ test.describe("@regression password reset", () => {
     }).rejects.toThrow();
   });
 
-  test("expired reset link shows an alert and no form", async ({ page, userFactory, mailpit }) => {
+  // Tagged @needs-test-seam because it drives `/api/test/password-reset/expire`,
+  // which is off in Vercel production. Nightly regression (which targets the
+  // production URL) skips this tag; PR previews and dev do not.
+  test("@needs-test-seam expired reset link shows an alert and no form", async ({
+    page,
+    userFactory,
+    mailpit,
+  }) => {
     const user = await userFactory.create();
     const requestPage = new PasswordResetRequestPage(page);
     const confirmPage = new PasswordResetConfirmPage(page);

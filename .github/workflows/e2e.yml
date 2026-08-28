@@ -128,7 +128,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
-      - run: pnpm exec playwright test --project=${{ matrix.browser }}
+      # Skip tests that drive dev/preview-only seams — `@needs-test-seam`
+      # tests hit endpoints under `/api/test/*`, which are 404 in Vercel
+      # production. Adding new seams? Tag their tests with @needs-test-seam
+      # so this filter picks them up automatically.
+      - run: pnpm exec playwright test --project=${{ matrix.browser }} --grep-invert "@needs-test-seam"
       - if: always()
         uses: actions/upload-artifact@v4
         with:

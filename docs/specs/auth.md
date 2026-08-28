@@ -177,7 +177,9 @@ assertion — need a way for E2E tests to fast-forward without wall-clock waits.
   hermetic (no DB creds in the runner), keeps the seam observable in HAR/traces.
 
 Add more seams here as future features need them; each one must be gated the
-same way.
+same way. Tests that depend on a seam must carry the `@needs-test-seam` tag —
+the nightly regression targets `PRODUCTION_URL` where the seam is 404, so it
+runs `--grep-invert "@needs-test-seam"` (see `.github/workflows/e2e.yml`).
 
 ## E2E test plan
 
