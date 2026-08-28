@@ -84,8 +84,17 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
 
+      # Same skip pattern as nightly-full (see comment below): the Vercel
+      # preview app under test can't reach Mailpit on the runner, and the
+      # `/api/test/*` seams are 404 on preview too unless E2E=1 is set in
+      # Vercel preview env. Local dev + the ci.yml quality job still run
+      # these tags with services attached.
       - name: Run Playwright
-        run: pnpm exec playwright test --project=${{ matrix.browser }} --shard=${{ matrix.shard }}/${{ matrix.total }}
+        run: >-
+          pnpm exec playwright test
+          --project=${{ matrix.browser }}
+          --shard=${{ matrix.shard }}/${{ matrix.total }}
+          --grep-invert "@needs-test-seam|@needs-mailpit"
 
       - name: Upload report
         if: always()
@@ -128,11 +137,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
-      # Skip tests that drive dev/preview-only seams — `@needs-test-seam`
-      # tests hit endpoints under `/api/test/*`, which are 404 in Vercel
-      # production. Adding new seams? Tag their tests with @needs-test-seam
-      # so this filter picks them up automatically.
-      - run: pnpm exec playwright test --project=${{ matrix.browser }} --grep-invert "@needs-test-seam"
+      # Skip tests that depend on infrastructure this job doesn't provision:
+      # `@needs-test-seam` hits `/api/test/*` (404 on Vercel production);
+      # `@needs-mailpit` polls Mailpit at localhost:8025 (not running here).
+      # Tag new tests accordingly and they get skipped here automatically.
+      - run: >-
+          pnpm exec playwright test
+          --project=${{ matrix.browser }}
+          --grep-invert "@needs-test-seam|@needs-mailpit"
       - if: always()
         uses: actions/upload-artifact@v4
         with:

@@ -21,7 +21,11 @@ function extractResetToken(body: { Text: string; HTML: string }): string {
   return decodeURIComponent(match[1]!);
 }
 
-test.describe("@regression password reset", () => {
+// `@needs-mailpit` — every test in this file drives the Mailpit HTTP API
+// (fixture teardown purges the inbox; assertions poll for reset messages).
+// CI shards against Vercel preview and nightly-full against prod can't reach
+// Mailpit at localhost:8025, so both jobs `--grep-invert` this tag.
+test.describe("@regression @needs-mailpit password reset", () => {
   test.beforeEach(async ({ mailpit }) => {
     await mailpit.deleteAll();
   });

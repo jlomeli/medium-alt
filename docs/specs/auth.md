@@ -177,9 +177,17 @@ assertion — need a way for E2E tests to fast-forward without wall-clock waits.
   hermetic (no DB creds in the runner), keeps the seam observable in HAR/traces.
 
 Add more seams here as future features need them; each one must be gated the
-same way. Tests that depend on a seam must carry the `@needs-test-seam` tag —
-the nightly regression targets `PRODUCTION_URL` where the seam is 404, so it
-runs `--grep-invert "@needs-test-seam"` (see `.github/workflows/e2e.yml`).
+same way. Two independent skip tags exist so a test's dependencies are
+declarative:
+
+- `@needs-test-seam` — needs `/api/test/*` endpoints (dev/preview only).
+- `@needs-mailpit` — needs Mailpit reachable at `localhost:8025`.
+
+Both the nightly-full job (against `PRODUCTION_URL`) and the PR e2e job
+(against a Vercel preview) `--grep-invert "@needs-test-seam|@needs-mailpit"`
+because neither reaches Mailpit and only PR previews reach the seams. The
+`ci.yml` quality job runs both tags with the service containers attached
+(`api` project only). See `.github/workflows/`.
 
 ## E2E test plan
 

@@ -16,7 +16,11 @@ function extractToken(body: { Text: string; HTML: string }): string {
   return decodeURIComponent(match[1]!);
 }
 
-test.describe("@regression api/password-reset/request", () => {
+// `@needs-mailpit` — the beforeEach purge + fixture assertions hit Mailpit
+// at localhost:8025, which isn't reachable when the app under test is a
+// Vercel preview or the prod URL. Both CI e2e job and nightly-full skip
+// this tag.
+test.describe("@regression @needs-mailpit api/password-reset/request", () => {
   test.beforeEach(async ({ mailpit }) => {
     await mailpit.deleteAll();
   });
@@ -45,7 +49,7 @@ test.describe("@regression api/password-reset/request", () => {
   });
 });
 
-test.describe("@regression api/password-reset/confirm", () => {
+test.describe("@regression @needs-mailpit api/password-reset/confirm", () => {
   test.beforeEach(async ({ mailpit }) => {
     await mailpit.deleteAll();
   });

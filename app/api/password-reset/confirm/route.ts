@@ -45,17 +45,20 @@ export async function POST(req: Request) {
 
   const passwordHash = await hashPassword(newPassword);
 
-  // Atomic claim: `updateMany` with `usedAt: null` in WHERE guarantees at
-  // most one concurrent caller succeeds. Without this, two requests could
-  // pass the pre-check above and both proceed to update the user's password.
+  // Atomic claim guards two races:
+  //   - Concurrent submits with the same token — `usedAt: null` in WHERE
+  //     lets exactly one caller succeed.
+  //   - Token expiring between the pre-check above and this write —
+  //     argon2 hashing takes 100-250ms; `expiresAt > now` in WHERE prevents
+  //     the claim from resurrecting a token that lapsed during the hash.
   const result = await db.$transaction(async (tx) => {
     const claimed = await tx.passwordResetToken.updateMany({
-      where: { id: row.id, usedAt: null },
+      where: { id: row.id, usedAt: null, expiresAt: { gt: new Date() } },
       data: { usedAt: new Date() },
     });
     if (claimed.count !== 1) {
-      // Another request beat us to this token — treat it as invalid, same
-      // response the pre-check would have produced.
+      // Lost the race — used, expired, or both. Same generic response the
+      // pre-checks above would have produced.
       return null;
     }
 
