@@ -26,14 +26,16 @@ export async function verifyPassword(hash: string, plain: string): Promise<boole
  * "no such user" login attempt match that of a "wrong password" attempt, so
  * timing analysis can't distinguish registered emails from unknown ones.
  *
- * The hash's plaintext is never a valid password — verify against it always
- * returns false. Lazily computed on first use so process startup stays cheap,
- * then cached at module scope.
+ * Pre-computed at development time (see scripts/gen-dummy-hash.mjs) rather
+ * than hashed on demand. A lazy compute would pay the hash cost only on the
+ * *first* cold-start unknown-email attempt, giving an attacker a distinct
+ * ~200 ms signal on that request. As a compile-time constant, the cost of a
+ * verify against this hash matches a verify against any real user's hash on
+ * every request, cold or warm.
+ *
+ * The plaintext is `dummy-never-matches-a-real-password` — never a valid
+ * password. `verifyPassword(DUMMY_PASSWORD_HASH, anything)` always returns
+ * false.
  */
-let dummyHashPromise: Promise<string> | null = null;
-export function dummyPasswordHash(): Promise<string> {
-  if (!dummyHashPromise) {
-    dummyHashPromise = hashPassword("dummy-never-matches-a-real-password");
-  }
-  return dummyHashPromise;
-}
+export const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=65536,p=4,t=3$gxKEY0XRvsWqOTkfFfMCpA$ls+8pvi/UByQ+/T9nEJ/Mm8FCxTuZIKRH6ZX2rvOpgU";
