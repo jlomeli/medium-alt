@@ -29,6 +29,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: {
     signIn: "/login",
   },
+  // Use the request's Host header for URL construction rather than a pinned
+  // `AUTH_URL` env var. Without this, Auth.js on a Vercel preview deployment
+  // constructs redirects (e.g. `/login?error=MissingCSRF`) against the
+  // production origin, which then 404s if there's no production deployment
+  // yet — that's how the E2E `loggedInPage` fixture was seeing "deployment
+  // could not be found" and misreporting it as a fixture failure.
+  trustHost: true,
   providers: [
     Credentials({
       credentials: {

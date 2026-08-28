@@ -31,8 +31,15 @@ export async function POST(req: Request) {
 
   if (user) {
     const userId = user.id;
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ?? process.env.AUTH_URL ?? "http://localhost:3000";
+    // Prefer per-deployment Vercel URL over any pinned env var so preview
+    // deploys email preview URLs (not a stale production alias). Same reason
+    // Auth.js has trustHost: true — the pinned URL was routing traffic to a
+    // deployment that may not exist yet.
+    const appUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : (process.env.NEXT_PUBLIC_APP_URL ??
+        process.env.AUTH_URL ??
+        "http://localhost:3000");
 
     after(async () => {
       try {

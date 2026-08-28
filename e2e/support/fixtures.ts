@@ -56,20 +56,30 @@ export const test = base.extend<Fixtures>({
     }
     const { csrfToken } = (await csrfRes.json()) as { csrfToken: string };
 
+    // maxRedirects: 0 so we can inspect the immediate response. Auth.js emits
+    // a 302 on both success (Location = callbackUrl / origin) and failure
+    // (Location contains `?error=`). Following blindly can hop the request to
+    // a different origin — see the trustHost comment in lib/auth/config.ts.
     const loginRes = await context.request.post("/api/auth/callback/credentials", {
       form: {
         csrfToken,
         email: user.email,
         password: user.password,
-        // Suppresses the 302 redirect Auth.js would normally issue so we get
-        // a JSON response and can assert the status.
-        json: "true",
       },
+      maxRedirects: 0,
     });
-    if (!loginRes.ok()) {
+    // Any 4xx/5xx is infrastructural (endpoint missing, CSRF cookie not
+    // applied, etc.); surface the body so it's diagnosable.
+    if (loginRes.status() >= 400) {
       throw new Error(
         `credentials login failed: ${loginRes.status()} — ${await loginRes.text()}`,
       );
+    }
+    // A 3xx with `error=` in the Location means authorize() rejected. Other
+    // 3xx codes are normal successful redirects to the callbackUrl.
+    const location = loginRes.headers()["location"] ?? "";
+    if (loginRes.status() >= 300 && location.includes("error=")) {
+      throw new Error(`credentials login rejected: redirect location=${location}`);
     }
     // Auth.js can respond 200 with { url: "/error?..." } when the credentials
     // authorize() returns null — the status alone isn't a success signal. The
