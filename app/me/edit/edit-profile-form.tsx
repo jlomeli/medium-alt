@@ -50,6 +50,14 @@ export function EditProfileForm({
     }
 
     setSubmitting(true);
+    // Only release the submit lock on FAILURE. On success the caller
+    // navigates away via `router.push("/me")`, but there's a window
+    // between the router transition starting and this component unmounting.
+    // Resetting `submitting` in that window re-enables the form and lets
+    // a second click land a concurrent PATCH — a last-write-wins race
+    // against the still-in-flight navigation. Holding the lock until
+    // unmount closes the race.
+    let hadFailure = false;
     try {
       const res = await fetch("/api/me", {
         method: "PATCH",
@@ -58,6 +66,7 @@ export function EditProfileForm({
       });
 
       if (!res.ok) {
+        hadFailure = true;
         const body = (await res.json().catch(() => null)) as
           | { error?: { field?: string; code?: string; message?: string } }
           | null;
@@ -80,11 +89,10 @@ export function EditProfileForm({
     } catch {
       // Network failure or a fetch rejection — same treatment as an
       // unmapped error above.
+      hadFailure = true;
       setTopLevelError("Couldn't reach the server. Please try again.");
     } finally {
-      // Always release the submit lock so the user isn't stuck with a
-      // permanently disabled button after a failure.
-      setSubmitting(false);
+      if (hadFailure) setSubmitting(false);
     }
   }
 
