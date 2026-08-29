@@ -52,12 +52,25 @@ function buildOperation(route: ReturnType<typeof listRoutes>[number]) {
         }
       : {}),
     responses: Object.entries(route.responses).reduce<
-      Record<string, { description: string; content: Record<string, { schema: unknown }> }>
+      Record<
+        string,
+        {
+          description: string;
+          headers?: Record<string, { description?: string; schema?: unknown }>;
+          content?: Record<string, { schema: unknown }>;
+        }
+      >
     >((acc, [code, r]) => {
       if (!r) return acc;
+      // Only emit `content` when there IS a body schema. A response with
+      // no body — e.g. a 303 whose contract is `Location` + `Set-Cookie`
+      // headers — must NOT carry `content: { "application/json": ... }`,
+      // or generated clients try to decode an empty payload and drop the
+      // real redirect/cookie contract on the floor.
       acc[code] = {
         description: r.description,
-        content: { "application/json": { schema: r.schema } },
+        ...(r.headers ? { headers: r.headers } : {}),
+        ...(r.schema ? { content: { "application/json": { schema: r.schema } } } : {}),
       };
       return acc;
     }, {}),

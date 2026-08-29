@@ -80,20 +80,33 @@ registerRoute({
   },
 });
 
-const logoutRedirectSchema = z.object({});
 registerRoute({
   method: "post",
   path: "/api/logout",
   summary: "Sign out the current session.",
   description:
-    "Clears the JWT session cookie and issues a 303 to `/`. Body is empty on " +
-    "both sides. Safe to call when unauthenticated (still clears any stale " +
-    "cookies).",
+    "Clears the JWT session cookie and issues a 303 to `/`. Both request and " +
+    "response bodies are empty — the contract is carried entirely by the " +
+    "`Location` and `Set-Cookie` response headers. Safe to call when " +
+    "unauthenticated (still clears any stale cookies).",
   tags: ["auth"],
   responses: {
     "303": {
-      description: "Session cleared; browser follows redirect to /.",
-      schema: logoutRedirectSchema,
+      description:
+        "Session cleared. Response body is empty; the browser follows " +
+        "the Location header and applies the Set-Cookie deletions.",
+      headers: {
+        Location: {
+          description: "Absolute or root-relative URL to navigate to after logout — always `/`.",
+          schema: { type: "string" },
+        },
+        "Set-Cookie": {
+          description:
+            "One or more Set-Cookie headers clearing every Auth.js session/csrf/callback " +
+            "cookie variant (both the plain and `__Secure-`/`__Host-`-prefixed forms).",
+          schema: { type: "string" },
+        },
+      },
     },
   },
 });
