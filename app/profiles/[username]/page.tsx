@@ -19,14 +19,19 @@ export default async function PublicProfilePage({
   const [user, session] = await Promise.all([
     db.user.findUnique({
       where: { username },
-      select: { username: true, name: true, bio: true },
+      // `id` is included solely for the ownership comparison — it is NOT
+      // rendered. Comparing on `username` breaks after a rename: the JWT
+      // still carries the pre-rename value until the next sign-in, so the
+      // real owner would see no Edit affordance until they logged out and
+      // back in. `id` is immutable.
+      select: { id: true, username: true, name: true, bio: true },
     }),
     auth(),
   ]);
 
   if (!user) notFound();
 
-  const isOwner = session?.user?.username === user.username;
+  const isOwner = session?.user?.id === user.id;
 
   return (
     <main className="mx-auto max-w-2xl p-6">

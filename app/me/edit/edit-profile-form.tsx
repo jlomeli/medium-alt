@@ -21,11 +21,17 @@ export function EditProfileForm({
   const [username, setUsername] = useState(initial.username);
   const [bio, setBio] = useState(initial.bio);
   const [errors, setErrors] = useState<FieldErrors>({});
+  const [topLevelError, setTopLevelError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Guard against a double-click landing a second submit while the first
+    // is in flight; the button also carries `disabled={submitting}` for
+    // pointer/keyboard consistency.
+    if (submitting) return;
     setErrors({});
+    setTopLevelError(null);
 
     // Build a partial payload — only include fields that actually changed
     // from the initial values. Empty submit is rejected server-side (and
@@ -44,28 +50,42 @@ export function EditProfileForm({
     }
 
     setSubmitting(true);
-    const res = await fetch("/api/me", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(parsed.data),
-    });
+    try {
+      const res = await fetch("/api/me", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed.data),
+      });
 
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as
-        | { error?: { field?: string; code?: string; message?: string } }
-        | null;
-      const err = body?.error;
-      if (err?.code === "username-taken") {
-        setErrors({ username: "Username is taken" });
-      } else if (err?.field) {
-        setErrors({ [err.field as keyof FieldErrors]: err.message ?? "Invalid value" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as
+          | { error?: { field?: string; code?: string; message?: string } }
+          | null;
+        const err = body?.error;
+        if (err?.code === "username-taken") {
+          setErrors({ username: "Username is taken" });
+        } else if (err?.field) {
+          setErrors({ [err.field as keyof FieldErrors]: err.message ?? "Invalid value" });
+        } else {
+          // Non-JSON body, unknown shape, or unmapped status — always surface
+          // *something* rather than silently clearing "Saving…" and leaving
+          // the user staring at an unchanged form.
+          setTopLevelError("Something went wrong. Please try again.");
+        }
+        return;
       }
-      setSubmitting(false);
-      return;
-    }
 
-    router.push("/me");
-    router.refresh();
+      router.push("/me");
+      router.refresh();
+    } catch {
+      // Network failure or a fetch rejection — same treatment as an
+      // unmapped error above.
+      setTopLevelError("Couldn't reach the server. Please try again.");
+    } finally {
+      // Always release the submit lock so the user isn't stuck with a
+      // permanently disabled button after a failure.
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -131,7 +151,8 @@ export function EditProfileForm({
         <div className="flex items-center gap-3">
           <button
             type="submit"
-            className="rounded-md bg-black px-4 py-2 text-white hover:bg-neutral-800"
+            disabled={submitting}
+            className="rounded-md bg-black px-4 py-2 text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Save changes
           </button>
@@ -139,6 +160,11 @@ export function EditProfileForm({
             Cancel
           </Link>
         </div>
+        {topLevelError && (
+          <p role="alert" className="text-sm text-red-600">
+            {topLevelError}
+          </p>
+        )}
         {submitting && <p className="text-sm text-neutral-500">Saving…</p>}
       </form>
     </main>
