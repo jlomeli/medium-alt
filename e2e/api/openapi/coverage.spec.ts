@@ -21,12 +21,15 @@ import path from "node:path";
  */
 
 /** app/api/**\/route.ts paths that intentionally do NOT need OpenAPI coverage. */
+// Paths are normalized to the OpenAPI templating convention (`{param}` not
+// `[param]`) before comparison — see `dirToRoutePath` below. Catch-all
+// segments like `[...nextauth]` normalize to `{...nextauth}`.
 const EXCLUDED_PATHS = new Set<string>([
   // Dev/E2E-only seam, guarded by NODE_ENV + VERCEL_ENV + E2E env vars.
   "/api/test/password-reset/expire",
   // Auth.js catch-all. Third-party contract; we document only our custom
   // endpoints alongside it (register, password-reset/*).
-  "/api/auth/[...nextauth]",
+  "/api/auth/{...nextauth}",
   // Trivial POST → 303 with no request body. Behavior spec'd in
   // docs/specs/auth.md; not worth the Zod surface area.
   "/api/logout",
@@ -51,10 +54,16 @@ function findRouteHandlers(dir: string): string[] {
   return results;
 }
 
-/** Convert an absolute `app/api/foo/[id]/route.ts` dir to `/api/foo/[id]`. */
+/**
+ * Convert an absolute `app/api/foo/[id]/route.ts` dir to its OpenAPI-style
+ * path — `/api/foo/{id}`. Next uses `[param]` and `[...catchAll]` for
+ * dynamic segments; OpenAPI uses `{param}`. Normalising to the OpenAPI
+ * form so the two representations can be compared directly.
+ */
 function dirToRoutePath(absDir: string): string {
   const rel = path.relative(path.join(process.cwd(), "app"), absDir);
-  return "/" + rel.split(path.sep).join("/");
+  const raw = "/" + rel.split(path.sep).join("/");
+  return raw.replace(/\[(\.\.\.)?([^\]]+)\]/g, "{$1$2}");
 }
 
 test.describe("@smoke @api openapi coverage", () => {

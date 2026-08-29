@@ -17,6 +17,7 @@ import {
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
 } from "@/lib/validation/auth";
+import { updateMeSchema } from "@/lib/validation/profile";
 
 // Response shapes as Zod so the OpenAPI generator can turn them into JSON
 // Schemas without a second declaration.
@@ -77,6 +78,73 @@ registerRoute({
   request: passwordResetRequestSchema,
   responses: {
     "200": { description: "Accepted.", schema: okSchema },
+  },
+});
+
+// -------- Profile --------
+
+const meResponseSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  username: z.string().nullable(),
+  name: z.string().nullable(),
+  bio: z.string().nullable(),
+});
+
+const publicProfileSchema = z.object({
+  username: z.string().nullable(),
+  name: z.string().nullable(),
+  bio: z.string().nullable(),
+});
+
+const unauthenticatedSchema = z.object({ error: z.literal("unauthenticated") });
+const notFoundSchema = z.object({ error: z.literal("not-found") });
+
+registerRoute({
+  method: "get",
+  path: "/api/me",
+  summary: "Get the signed-in user's profile.",
+  description:
+    "Returns the caller's own profile row. Includes fields that are private to " +
+    "the user (`email`) alongside public ones. Requires an authenticated session.",
+  tags: ["profile"],
+  responses: {
+    "200": { description: "The current user's profile.", schema: meResponseSchema },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "patch",
+  path: "/api/me",
+  summary: "Update the signed-in user's profile.",
+  description:
+    "Partial update — every field is individually optional, but the payload " +
+    "must include at least one. Duplicate username emits the same field/code " +
+    "shape as POST /api/register so client wiring is symmetric.",
+  tags: ["profile"],
+  request: updateMeSchema,
+  responses: {
+    "200": { description: "The updated profile.", schema: meResponseSchema },
+    "400": {
+      description: "Validation error (Zod or unique-constraint collision).",
+      schema: fieldErrorSchema,
+    },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/users/{username}",
+  summary: "Get a user's public profile.",
+  description:
+    "Public — no session required. Response body is deliberately narrow: " +
+    "`username`, `name`, `bio`. Never `email` or `id`.",
+  tags: ["profile"],
+  responses: {
+    "200": { description: "The user's public profile.", schema: publicProfileSchema },
+    "404": { description: "Unknown username.", schema: notFoundSchema },
   },
 });
 

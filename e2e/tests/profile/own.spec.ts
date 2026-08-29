@@ -13,13 +13,14 @@ test.describe("@smoke own profile", () => {
     await own.goto();
 
     await expect(own.heading).toBeVisible();
-    // The loggedInPage fixture creates a fresh user whose factory attrs
-    // include name = `Test User ${slug}`, username = slug, and
-    // email = `${slug}@example.test`. Match the slug prefix and shape;
-    // the exact random suffix is captured by the fixture.
-    await expect(loggedInPage.getByText(/Test User u-[a-f0-9]{8}/)).toBeVisible();
-    await expect(loggedInPage.getByText(/@u-[a-f0-9]{8}/)).toBeVisible();
-    await expect(loggedInPage.getByText(/u-[a-f0-9]{8}@example\.test/)).toBeVisible();
+    // Scope to <main> — the site header also renders the user's name in
+    // the Account menu button, so a page-wide getByText matches twice.
+    // The loggedInPage fixture's factory attrs are name = `Test User
+    // ${slug}`, username = slug, email = `${slug}@example.test`.
+    const main = loggedInPage.getByRole("main");
+    await expect(main.getByText(/Test User u-[a-f0-9]{8}/)).toBeVisible();
+    await expect(main.getByText(/@u-[a-f0-9]{8}/)).toBeVisible();
+    await expect(main.getByText(/u-[a-f0-9]{8}@example\.test/)).toBeVisible();
   });
 
   test("has an Edit profile link that navigates to /me/edit", async ({ loggedInPage }) => {
