@@ -14,6 +14,7 @@ import { z } from "zod";
 import { registerRoute } from "./registry";
 import {
   registerSchema,
+  loginSchema,
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
 } from "@/lib/validation/auth";
@@ -47,6 +48,67 @@ const okWithEmailSchema = z.object({
 
 const resetConfirmErrorSchema = z.object({
   error: z.enum(["expired", "invalid", "weak-password"]),
+});
+
+const loginResponseSchema = z.object({
+  user: z.object({
+    id: z.string(),
+    email: z.string().email(),
+    username: z.string().nullable(),
+  }),
+});
+
+const invalidCredentialsSchema = z.object({
+  error: z.literal("invalid-credentials"),
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/login",
+  summary: "Sign in with email + password.",
+  description:
+    "First-party JSON wrapper over Auth.js Credentials sign-in. Success sets " +
+    "the session cookie and returns the user's public shape. Failure returns " +
+    "`invalid-credentials` for both wrong-password and unknown-email — the " +
+    "response body is byte-identical across the two paths (anti-enumeration).",
+  tags: ["auth"],
+  request: loginSchema,
+  responses: {
+    "200": { description: "Signed in.", schema: loginResponseSchema },
+    "400": { description: "Zod validation error.", schema: fieldErrorSchema },
+    "401": { description: "Wrong password or unknown email.", schema: invalidCredentialsSchema },
+  },
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/logout",
+  summary: "Sign out the current session.",
+  description:
+    "Clears the JWT session cookie and issues a 303 to `/`. Both request and " +
+    "response bodies are empty — the contract is carried entirely by the " +
+    "`Location` and `Set-Cookie` response headers. Safe to call when " +
+    "unauthenticated (still clears any stale cookies).",
+  tags: ["auth"],
+  responses: {
+    "303": {
+      description:
+        "Session cleared. Response body is empty; the browser follows " +
+        "the Location header and applies the Set-Cookie deletions.",
+      headers: {
+        Location: {
+          description: "Absolute or root-relative URL to navigate to after logout — always `/`.",
+          schema: { type: "string" },
+        },
+        "Set-Cookie": {
+          description:
+            "One or more Set-Cookie headers clearing every Auth.js session/csrf/callback " +
+            "cookie variant (both the plain and `__Secure-`/`__Host-`-prefixed forms).",
+          schema: { type: "string" },
+        },
+      },
+    },
+  },
 });
 
 registerRoute({

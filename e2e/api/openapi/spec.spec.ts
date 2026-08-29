@@ -91,13 +91,36 @@ test.describe("@smoke @api openapi document", () => {
     }
   });
 
+  test("bodyless responses (303 logout) advertise headers, not a JSON body", async ({ api }) => {
+    // Pinning test: /api/logout returns an empty 303 whose contract is
+    // Location + Set-Cookie. Advertising `content: application/json` here
+    // would tell generated clients there's a body to decode and hide the
+    // real redirect/cookie contract from strict tooling.
+    const { body } = await fetchDoc(api);
+    const op = body.paths["/api/logout"]?.["post"] as
+      | { responses?: Record<string, unknown> }
+      | undefined;
+    expect(op, "POST /api/logout must be registered").toBeDefined();
+    const response303 = op!.responses?.["303"] as
+      | { content?: unknown; headers?: Record<string, unknown> }
+      | undefined;
+    expect(response303, "303 response must be present").toBeDefined();
+    expect(response303!.content, "303 must not advertise a JSON body").toBeUndefined();
+    expect(response303!.headers).toBeDefined();
+    expect(Object.keys(response303!.headers!)).toEqual(
+      expect.arrayContaining(["Location", "Set-Cookie"]),
+    );
+  });
+
   test("excluded surfaces do not appear in the document", async ({ api }) => {
     const { body } = await fetchDoc(api);
     const paths = Object.keys(body.paths);
+    // `/api/logout` was previously here; as of the auth-api slice (#9) it
+    // is intentionally documented, so it's dropped from this list. See
+    // docs/specs/auth-api.md for the rationale.
     for (const forbidden of [
       "/api/openapi.json",
       "/api/docs",
-      "/api/logout",
       "/api/auth/csrf",
       "/api/auth/callback/credentials",
       "/api/test/password-reset/expire",

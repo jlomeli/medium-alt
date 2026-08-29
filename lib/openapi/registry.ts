@@ -12,6 +12,19 @@ import type { ZodType } from "zod";
 
 export type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
+export interface ResponseHeaderSpec {
+  description?: string;
+  schema?: { type: "string" | "integer" | "number" | "boolean" };
+}
+
+export interface RegisteredResponse {
+  description: string;
+  /** Omit for empty-body responses (e.g. a 303 whose contract is headers only). */
+  schema?: ZodType;
+  /** Response headers to document — Location, Set-Cookie, ETag, etc. */
+  headers?: Record<string, ResponseHeaderSpec>;
+}
+
 export interface RegisteredRoute {
   method: HttpMethod;
   path: string;
@@ -19,7 +32,7 @@ export interface RegisteredRoute {
   description?: string;
   tags?: string[];
   request?: ZodType;
-  responses: Partial<Record<string, { description: string; schema: ZodType }>>;
+  responses: Partial<Record<string, RegisteredResponse>>;
 }
 
 const routes: RegisteredRoute[] = [];
