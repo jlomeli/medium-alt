@@ -28,11 +28,8 @@ const EXCLUDED_PATHS = new Set<string>([
   // Dev/E2E-only seam, guarded by NODE_ENV + VERCEL_ENV + E2E env vars.
   "/api/test/password-reset/expire",
   // Auth.js catch-all. Third-party contract; we document only our custom
-  // endpoints alongside it (register, password-reset/*).
+  // endpoints alongside it (register, login, password-reset/*).
   "/api/auth/{...nextauth}",
-  // Trivial POST → 303 with no request body. Behavior spec'd in
-  // docs/specs/auth.md; not worth the Zod surface area.
-  "/api/logout",
   // Self-references — documenting the docs docs itself is a loop.
   "/api/openapi.json",
   "/api/docs",

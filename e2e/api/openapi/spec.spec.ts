@@ -94,10 +94,12 @@ test.describe("@smoke @api openapi document", () => {
   test("excluded surfaces do not appear in the document", async ({ api }) => {
     const { body } = await fetchDoc(api);
     const paths = Object.keys(body.paths);
+    // `/api/logout` was previously here; as of the auth-api slice (#9) it
+    // is intentionally documented, so it's dropped from this list. See
+    // docs/specs/auth-api.md for the rationale.
     for (const forbidden of [
       "/api/openapi.json",
       "/api/docs",
-      "/api/logout",
       "/api/auth/csrf",
       "/api/auth/callback/credentials",
       "/api/test/password-reset/expire",
