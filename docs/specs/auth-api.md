@@ -1,6 +1,6 @@
 # Spec: Auth API surface (`/api/login` + `/api/logout` in OpenAPI)
 
-Tracking: #TBD
+Tracking: #9
 Status: draft
 Owner: jlomeli
 
