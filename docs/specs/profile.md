@@ -1,6 +1,6 @@
 # Spec: Profile (view / edit / public)
 
-Tracking: #TBD
+Tracking: #7
 Status: draft
 Owner: jlomeli
 
