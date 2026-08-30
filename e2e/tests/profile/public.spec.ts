@@ -60,4 +60,25 @@ test.describe("@smoke public profile", () => {
     await profile.gotoUsername(stranger.username);
     await expect(profile.editProfileLink).toHaveCount(0);
   });
+
+  // Added in slice 4a — docs/specs/articles-crud.md § Public author listing.
+  test("renders an Articles section listing the owner's published articles only", async ({
+    page,
+    loggedInPage,
+    articleFactory,
+  }) => {
+    const meRes = await loggedInPage.request.get("/api/me");
+    const me = (await meRes.json()) as { username: string };
+
+    const draft = await articleFactory.create(loggedInPage.request, { published: false });
+    const published = await articleFactory.create(loggedInPage.request, { published: true });
+
+    const profile = new PublicProfilePage(page);
+    await profile.gotoUsername(me.username);
+
+    // Public reader (unauthenticated) sees the published article as a
+    // link into /articles/{slug}, and never sees the draft.
+    await expect(page.getByRole("link", { name: published.title })).toBeVisible();
+    await expect(page.getByText(draft.title)).toHaveCount(0);
+  });
 });

@@ -1,5 +1,6 @@
 import { test as base, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { UserFactory, type CreatedUser } from "./factories/user.factory";
+import { ArticleFactory } from "./factories/article.factory";
 import { MailpitClient } from "./clients/mailpit.client";
 
 /**
@@ -19,6 +20,7 @@ import { MailpitClient } from "./clients/mailpit.client";
 type Fixtures = {
   api: APIRequestContext;
   userFactory: UserFactory;
+  articleFactory: ArticleFactory;
   testUser: CreatedUser;
   loggedInPage: Page;
   mailpit: MailpitClient;
@@ -31,6 +33,14 @@ export const test = base.extend<Fixtures>({
 
   userFactory: async ({ request }, use) => {
     await use(new UserFactory(request));
+  },
+
+  articleFactory: async ({}, use) => {
+    // No bound context — Article creation requires auth, so callers pass
+    // an already-authenticated APIRequestContext (typically
+    // `loggedInPage.request`). Keeping the factory context-free makes it
+    // trivial to create articles for multiple authors in the same test.
+    await use(new ArticleFactory());
   },
 
   testUser: async ({ userFactory }, use) => {
