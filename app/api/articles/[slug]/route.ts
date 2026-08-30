@@ -8,6 +8,7 @@
  * tell whether the slug maps to nothing or to someone else's row.
  */
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { updateArticleSchema } from "@/lib/validation/article";
@@ -50,7 +51,7 @@ export async function PATCH(
   const { slug } = await params;
   const existing = await db.article.findUnique({
     where: { slug },
-    select: { id: true, authorId: true, publishedAt: true },
+    select: { id: true, authorId: true },
   });
   // Both "row missing" and "row exists but different owner" collapse to
   // the same 404 — see the anti-enumeration note at the top of the file.
@@ -82,23 +83,47 @@ export async function PATCH(
     data.subtitle = parsed.data.subtitle.length > 0 ? parsed.data.subtitle : null;
   }
   if (parsed.data.body !== undefined) data.body = parsed.data.body;
+  // Publish semantics: first publish sets publishedAt = now(); republish
+  // keeps the original; unpublish clears it. See spec § Publish semantics.
+  // The first-publish stamp is applied via a conditional `updateMany` in
+  // the transaction below (`where: { publishedAt: null }`) so two
+  // concurrent publish requests can't both observe null, both stamp their
+  // own now(), and overwrite the real first-publication time — only the
+  // first-to-commit writer sets the value.
   if (parsed.data.published !== undefined) {
     data.published = parsed.data.published;
-    // Publish semantics: first publish sets publishedAt = now(); republish
-    // keeps the original; unpublish clears it. See spec § Publish semantics.
-    if (parsed.data.published) {
-      if (existing.publishedAt === null) data.publishedAt = new Date();
-    } else {
-      data.publishedAt = null;
-    }
+    if (!parsed.data.published) data.publishedAt = null;
   }
+  const publishing = parsed.data.published === true;
 
-  const updated = await db.article.update({
-    where: { id: existing.id },
-    data,
-    select: articleViewSelect,
-  });
-  return NextResponse.json({ article: updated });
+  try {
+    const updated = await db.$transaction(async (tx) => {
+      if (publishing) {
+        // Atomic first-publish stamp: only writes when publishedAt is
+        // still null, so a republish is a no-op here.
+        await tx.article.updateMany({
+          where: { id: existing.id, publishedAt: null },
+          data: { publishedAt: new Date() },
+        });
+      }
+      return tx.article.update({
+        where: { id: existing.id },
+        data,
+        select: articleViewSelect,
+      });
+    });
+    return NextResponse.json({ article: updated });
+  } catch (err) {
+    // Concurrent DELETE landed between the ownership lookup and the
+    // update — surface as 404 (the row is gone), not a 500.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2025"
+    ) {
+      return NextResponse.json({ error: "not-found" }, { status: 404 });
+    }
+    throw err;
+  }
 }
 
 export async function DELETE(

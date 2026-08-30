@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useState } from "react";
 import {
@@ -30,6 +30,7 @@ interface Props {
 
 export function ArticleForm({ mode, initial, slug }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
   const [title, setTitle] = useState(initial.title);
   const [subtitle, setSubtitle] = useState(initial.subtitle);
   const [body, setBody] = useState(initial.body);
@@ -109,20 +110,21 @@ export function ArticleForm({ mode, initial, slug }: Props) {
 
       const data = (await res.json()) as { article: { slug: string; published: boolean } };
       // Post-save navigation. See docs/specs/articles-crud.md § Create / Edit.
-      if (mode === "create") {
-        router.push(
-          data.article.published
-            ? `/articles/${data.article.slug}`
-            : `/articles/${data.article.slug}/edit`,
-        );
-      } else {
-        router.push(
-          data.article.published
-            ? `/articles/${data.article.slug}`
-            : `/articles/${data.article.slug}/edit`,
-        );
-      }
+      const destination = data.article.published
+        ? `/articles/${data.article.slug}`
+        : `/articles/${data.article.slug}/edit`;
+      router.push(destination);
       router.refresh();
+
+      // Release the submission lock when the destination equals the
+      // current pathname (canonical case: saving a draft from
+      // `/articles/{slug}/edit` re-pushes the same URL). Without this
+      // release the component never unmounts, so `submitting=true`
+      // would leave the button disabled and the "Saving…" indicator
+      // stuck until a full page reload. Cross-route saves keep the
+      // lock so the transition window can't land a second concurrent
+      // write (same reason as EditProfileForm).
+      if (destination === pathname) setSubmitting(false);
     } catch {
       hadFailure = true;
       setTopLevelError("Couldn't reach the server. Please try again.");
