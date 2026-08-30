@@ -23,7 +23,9 @@ export class ArticleFormPage extends BasePage {
     super(page);
     this.newHeading = this.page.getByRole("heading", { name: "New article" });
     this.editHeading = this.page.getByRole("heading", { name: "Edit article" });
-    this.titleField = this.page.getByLabel("Title");
+    // Exact match — "Subtitle" would otherwise also match a non-exact
+    // `getByLabel("Title")` and produce a strict-mode violation.
+    this.titleField = this.page.getByLabel("Title", { exact: true });
     this.subtitleField = this.page.getByLabel(/^subtitle/i);
     this.bodyField = this.page.getByLabel("Body");
     this.publishedCheckbox = this.page.getByRole("checkbox", {
@@ -57,7 +59,42 @@ export class ArticleFormPage extends BasePage {
     }
   }
 
+  /**
+   * Click "Delete article" and wait for the DELETE response before
+   * returning — same rationale as `submit()`: callers can immediately
+   * follow up with a verification GET without racing an in-flight write.
+   * The caller is responsible for wiring `page.once("dialog", ...)` to
+   * accept the `window.confirm()` before invoking.
+   */
+  async delete(): Promise<void> {
+    await Promise.all([
+      this.page.waitForResponse(
+        (res) =>
+          /\/api\/articles\/[^/?]+$/.test(new URL(res.url()).pathname) &&
+          res.request().method() === "DELETE",
+      ),
+      this.deleteButton.click(),
+    ]);
+  }
+
   async submit(): Promise<void> {
+    // Race the two possible outcomes:
+    //   - happy path: the underlying POST/PATCH completes;
+    //   - client-side reject: the schema fires before any request goes out,
+    //     and an inline `role="alert"` renders.
+    // Waiting for either lets happy-path callers avoid a browser navigation
+    // cancelling the in-flight fetch AND avoids hanging on the client-only
+    // failure paths where no network call is ever made.
+    const alertCountBefore = await this.page.getByRole("alert").count();
+    const network = this.page.waitForResponse(
+      (res) =>
+        /\/api\/articles(\/[^/?]+)?$/.test(new URL(res.url()).pathname) &&
+        ["POST", "PATCH"].includes(res.request().method()),
+    );
+    const newAlert = this.page
+      .locator(`role=alert >> nth=${alertCountBefore}`)
+      .waitFor({ state: "visible" });
     await this.saveButton.click();
+    await Promise.race([network, newAlert]);
   }
 }

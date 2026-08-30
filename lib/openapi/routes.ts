@@ -19,6 +19,10 @@ import {
   passwordResetConfirmSchema,
 } from "@/lib/validation/auth";
 import { updateMeSchema } from "@/lib/validation/profile";
+import {
+  createArticleSchema,
+  updateArticleSchema,
+} from "@/lib/validation/article";
 
 // Response shapes as Zod so the OpenAPI generator can turn them into JSON
 // Schemas without a second declaration.
@@ -206,6 +210,123 @@ registerRoute({
   tags: ["profile"],
   responses: {
     "200": { description: "The user's public profile.", schema: publicProfileSchema },
+    "404": { description: "Unknown username.", schema: notFoundSchema },
+  },
+});
+
+// -------- Articles (docs/specs/articles-crud.md § API surface) --------
+
+const authorViewSchema = z.object({
+  username: z.string().nullable(),
+  name: z.string().nullable(),
+});
+
+const articleViewSchema = z.object({
+  slug: z.string(),
+  title: z.string(),
+  subtitle: z.string().nullable(),
+  body: z.string(),
+  published: z.boolean(),
+  publishedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  author: authorViewSchema,
+});
+
+const articleResponseSchema = z.object({ article: articleViewSchema });
+
+const publicArticleSummarySchema = z.object({
+  slug: z.string(),
+  title: z.string(),
+  subtitle: z.string().nullable(),
+  publishedAt: z.string().datetime().nullable(),
+});
+
+const articlesListSchema = z.object({
+  articles: z.array(publicArticleSummarySchema),
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/articles",
+  summary: "Create a new article.",
+  description:
+    "Author is the signed-in user. Slug is server-generated (kebab title + " +
+    "8 hex chars) and immutable after create. `published: true` sets " +
+    "`publishedAt = now()` atomically.",
+  tags: ["articles"],
+  request: createArticleSchema,
+  responses: {
+    "201": { description: "Article created.", schema: articleResponseSchema },
+    "400": { description: "Zod validation error.", schema: fieldErrorSchema },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/articles/{slug}",
+  summary: "Get an article by slug.",
+  description:
+    "Public for published articles. Drafts are visible only to their author; " +
+    "every other caller (signed-in or not) gets 404 — matches the write-side " +
+    "anti-enumeration behaviour. Never leaks `authorId`.",
+  tags: ["articles"],
+  responses: {
+    "200": { description: "The article.", schema: articleResponseSchema },
+    "404": { description: "No such article, or draft the caller doesn't own.", schema: notFoundSchema },
+  },
+});
+
+registerRoute({
+  method: "patch",
+  path: "/api/articles/{slug}",
+  summary: "Update an article.",
+  description:
+    "Author-only. Non-authors get 404 (never 403) — same anti-enumeration " +
+    "defense as GET. Toggling `published` false→true sets `publishedAt = now()` " +
+    "on the first publish and keeps the original on republish; true→false " +
+    "clears both. Slug is immutable.",
+  tags: ["articles"],
+  request: updateArticleSchema,
+  responses: {
+    "200": { description: "The updated article.", schema: articleResponseSchema },
+    "400": { description: "Zod validation error.", schema: fieldErrorSchema },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": { description: "No such article, or caller is not the author.", schema: notFoundSchema },
+  },
+});
+
+registerRoute({
+  method: "delete",
+  path: "/api/articles/{slug}",
+  summary: "Delete an article.",
+  description:
+    "Author-only. Non-authors get 404 (never 403). Response body is empty; " +
+    "the contract is carried by the 204 status.",
+  tags: ["articles"],
+  responses: {
+    "204": {
+      description: "Article deleted. Response body is empty.",
+    },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": { description: "No such article, or caller is not the author.", schema: notFoundSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/users/{username}/articles",
+  summary: "List a user's published articles.",
+  description:
+    "Public — no session required. Published-only; drafts never leak (even " +
+    "for the author-as-caller — this is a public-shape endpoint only). " +
+    "Response items are the narrow `PublicArticleSummary` shape: `slug`, " +
+    "`title`, `subtitle`, `publishedAt`. Never `body`, never `authorId`, " +
+    "never `author`.",
+  tags: ["articles"],
+  responses: {
+    "200": { description: "Published articles for the user.", schema: articlesListSchema },
     "404": { description: "Unknown username.", schema: notFoundSchema },
   },
 });

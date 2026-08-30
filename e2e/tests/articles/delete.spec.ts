@@ -16,7 +16,9 @@ test.describe("@regression delete article", () => {
 
     // Playwright dialogs — accept the confirm() before clicking.
     loggedInPage.once("dialog", (d) => d.accept());
-    await form.deleteButton.click();
+    // POM `.delete()` waits for the DELETE response so the follow-up GET
+    // below doesn't race the still-in-flight request.
+    await form.delete();
 
     // Follow-up API GET confirms the row is gone.
     const res = await loggedInPage.request.get(`/api/articles/${article.slug}`);
