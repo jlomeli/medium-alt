@@ -48,8 +48,12 @@ test.describe("@regression edit article", () => {
     await form.fill({ published: true });
     await form.submit();
 
-    // After save, published article lands on the public read view.
-    await read.gotoSlug(article.slug);
+    // After save, the form's client-side `router.push` navigates to the
+    // public read view. Wait for the URL to settle rather than issuing a
+    // competing `page.goto` to the same URL — webkit surfaces the
+    // same-target overlap as "Navigation ... is interrupted by another
+    // navigation" and fails the test.
+    await expect(loggedInPage).toHaveURL(new RegExp(`/articles/${article.slug}$`));
     await expect(read.draftBadge).toHaveCount(0);
     // The author line contains a publishedAt phrase — matches on year at
     // minimum so the test isn't tied to a specific date format.
