@@ -7,6 +7,8 @@ import {
   createArticleSchema,
   updateArticleSchema,
 } from "@/lib/validation/article";
+import type { TiptapDoc } from "@/lib/articles/tiptap";
+import { ArticleEditor } from "./ArticleEditor";
 
 interface FieldErrors {
   title?: string;
@@ -17,7 +19,8 @@ interface FieldErrors {
 export interface ArticleFormValues {
   title: string;
   subtitle: string;
-  body: string;
+  /** Tiptap ProseMirror doc — the shape stored on `Article.body`. */
+  body: TiptapDoc;
   published: boolean;
 }
 
@@ -33,7 +36,7 @@ export function ArticleForm({ mode, initial, slug }: Props) {
   const pathname = usePathname();
   const [title, setTitle] = useState(initial.title);
   const [subtitle, setSubtitle] = useState(initial.subtitle);
-  const [body, setBody] = useState(initial.body);
+  const [body, setBody] = useState<TiptapDoc>(initial.body);
   const [published, setPublished] = useState(initial.published);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topLevelError, setTopLevelError] = useState<string | null>(null);
@@ -194,15 +197,13 @@ export function ArticleForm({ mode, initial, slug }: Props) {
           )}
         </div>
         <div>
-          <label className="mb-1 block text-sm" htmlFor="body">
+          <p id="article-body-label" className="mb-1 block text-sm">
             Body
-          </label>
-          <textarea
-            id="body"
+          </p>
+          <ArticleEditor
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            className="w-full rounded-md border px-3 py-2"
-            rows={12}
+            onChange={setBody}
+            labelId="article-body-label"
           />
           {errors.body && (
             <p role="alert" className="mt-1 text-sm text-red-600">

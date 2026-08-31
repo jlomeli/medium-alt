@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { ArticleForm } from "@/components/articles/ArticleForm";
+import type { TiptapDoc } from "@/lib/articles/tiptap";
 
 /**
  * `/articles/[slug]/edit` — author-only. Non-authors get 404 (never
@@ -38,7 +39,10 @@ export default async function EditArticlePage({
       initial={{
         title: article.title,
         subtitle: article.subtitle ?? "",
-        body: article.body,
+        // Prisma types `Json` columns as `JsonValue`; the write-path Zod
+        // schema guarantees the stored shape is a Tiptap doc, so a cast
+        // at this boundary is safe.
+        body: article.body as unknown as TiptapDoc,
         published: article.published,
       }}
     />

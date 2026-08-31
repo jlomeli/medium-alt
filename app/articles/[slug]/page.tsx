@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
+import { renderTiptap, type TiptapDoc } from "@/lib/articles/tiptap";
 
 /**
  * `/articles/[slug]` — public read view. Drafts are visible only to
@@ -78,12 +79,20 @@ export default async function ArticleReadPage({
             </>
           )}
         </section>
+        {/*
+          Body is a Zod-validated Tiptap doc (see
+          docs/specs/articles-editor.md § Rendering). `renderTiptap`
+          walks the same extension list the editor uses; the schema
+          rejects every node/mark type and unsafe href before the doc
+          reaches Prisma, so no post-render sanitizer runs here.
+        */}
         <section
           aria-label="Body"
-          className="mt-6 whitespace-pre-wrap text-base leading-relaxed"
-        >
-          {article.body}
-        </section>
+          className="prose mt-6 max-w-none"
+          dangerouslySetInnerHTML={{
+            __html: renderTiptap(article.body as unknown as TiptapDoc),
+          }}
+        />
       </article>
       {isAuthor && (
         <div className="mt-8">

@@ -11,7 +11,8 @@ test.describe("@smoke @regression create article", () => {
     await expect(form.newHeading).toBeVisible();
     await expect(form.titleField).toBeVisible();
     await expect(form.subtitleField).toBeVisible();
-    await expect(form.bodyField).toBeVisible();
+    await expect(form.bodyEditor).toBeVisible();
+    await expect(form.toolbar).toBeVisible();
     await expect(form.publishedCheckbox).toBeVisible();
     await expect(form.publishedCheckbox).not.toBeChecked();
   });
@@ -64,17 +65,21 @@ test.describe("@smoke @regression create article", () => {
     await expect(loggedInPage).toHaveURL(/\/articles\/new/);
   });
 
-  test("body over max length surfaces a field-level error", async ({
+  test("body over max serialized size surfaces a field-level error", async ({
     loggedInPage,
     articleFactory,
   }) => {
+    // 4b caps the body at 40k serialized JSON bytes (see
+    // docs/specs/articles-editor.md § Validation). A single-paragraph
+    // doc with 40 001 chars of text serializes to just above that cap
+    // once node/mark overhead is added.
     const form = new ArticleFormPage(loggedInPage);
-    const attrs = articleFactory.build({ body: "x".repeat(20_001) });
+    const attrs = articleFactory.build({ body: "x".repeat(40_001) });
     await form.gotoNew();
     await form.fill(attrs);
     await form.submit();
 
-    await expect(loggedInPage.getByText(/body must be at most/i)).toBeVisible();
+    await expect(loggedInPage.getByText(/body.*too (long|large)|body must be at most/i)).toBeVisible();
     await expect(loggedInPage).toHaveURL(/\/articles\/new/);
   });
 });

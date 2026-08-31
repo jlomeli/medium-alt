@@ -221,11 +221,24 @@ const authorViewSchema = z.object({
   name: z.string().nullable(),
 });
 
+// Response body is a Tiptap ProseMirror doc — the full JSON is
+// non-trivial to express in OpenAPI and the authoritative shape lives
+// in `lib/validation/article.ts` (`tiptapDocSchema`), so the response
+// contract advertises the `type: "doc"` sentinel + a permissive
+// `content` array. The write side uses the strict Zod schema and
+// rejects anything outside the allowlist.
+const articleBodyDocSchema = z
+  .object({
+    type: z.literal("doc"),
+    content: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .describe("Tiptap ProseMirror doc — see lib/validation/article.ts.");
+
 const articleViewSchema = z.object({
   slug: z.string(),
   title: z.string(),
   subtitle: z.string().nullable(),
-  body: z.string(),
+  body: articleBodyDocSchema,
   published: z.boolean(),
   publishedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),

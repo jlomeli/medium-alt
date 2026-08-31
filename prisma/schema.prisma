@@ -84,7 +84,7 @@ model Article {
   slug        String    @unique
   title       String
   subtitle    String?
-  body        String
+  body        Json      // Tiptap ProseMirror document. Zod-validated on write (see lib/validation/article.ts).
   published   Boolean   @default(false)
   publishedAt DateTime?
   authorId    String

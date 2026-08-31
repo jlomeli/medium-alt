@@ -73,7 +73,7 @@ export async function PATCH(
   const data: {
     title?: string;
     subtitle?: string | null;
-    body?: string;
+    body?: Prisma.InputJsonValue;
     published?: boolean;
     publishedAt?: Date | null;
   } = {};
@@ -82,7 +82,11 @@ export async function PATCH(
     // Empty subtitle after edit clears the field rather than storing "".
     data.subtitle = parsed.data.subtitle.length > 0 ? parsed.data.subtitle : null;
   }
-  if (parsed.data.body !== undefined) data.body = parsed.data.body;
+  // Zod already enforced the Tiptap doc shape; Prisma's `InputJsonValue`
+  // is stricter than our loose type, so cast at the boundary.
+  if (parsed.data.body !== undefined) {
+    data.body = parsed.data.body as unknown as Prisma.InputJsonValue;
+  }
   // Publish semantics: first publish sets publishedAt = now(); republish
   // keeps the original; unpublish clears it. See spec § Publish semantics.
   // The publishedAt write is decided under a row-level lock inside the
