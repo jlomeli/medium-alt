@@ -3,6 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
+import { listPublishedArticlesByUsername } from "@/lib/articles/service";
 
 /**
  * `/profiles/:username` — public profile.
@@ -32,6 +33,10 @@ export default async function PublicProfilePage({
   if (!user) notFound();
 
   const isOwner = session?.user?.id === user.id;
+  // Same code path as GET /api/users/{username}/articles — the on-page
+  // render and the public API can't drift. See docs/specs/articles-crud.md
+  // § Public author listing.
+  const articles = (await listPublishedArticlesByUsername(username)) ?? [];
 
   return (
     <main className="mx-auto max-w-2xl p-6">
@@ -46,6 +51,28 @@ export default async function PublicProfilePage({
           </Link>
         </div>
       )}
+      <section aria-label="Articles" className="mt-10">
+        <h2 className="mb-4 font-serif text-2xl font-bold">Articles</h2>
+        {articles.length === 0 ? (
+          <p className="text-neutral-600">No published articles yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-4">
+            {articles.map((article) => (
+              <li key={article.slug}>
+                <Link
+                  href={`/articles/${article.slug}`}
+                  className="text-lg font-medium underline"
+                >
+                  {article.title}
+                </Link>
+                {article.subtitle && (
+                  <p className="text-sm text-neutral-600">{article.subtitle}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   );
 }
