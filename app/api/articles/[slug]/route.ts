@@ -85,26 +85,44 @@ export async function PATCH(
   if (parsed.data.body !== undefined) data.body = parsed.data.body;
   // Publish semantics: first publish sets publishedAt = now(); republish
   // keeps the original; unpublish clears it. See spec § Publish semantics.
-  // The first-publish stamp is applied via a conditional `updateMany` in
-  // the transaction below (`where: { publishedAt: null }`) so two
-  // concurrent publish requests can't both observe null, both stamp their
-  // own now(), and overwrite the real first-publication time — only the
-  // first-to-commit writer sets the value.
+  // The publishedAt write is decided under a row-level lock inside the
+  // transaction below — see the SELECT … FOR UPDATE comment.
   if (parsed.data.published !== undefined) {
     data.published = parsed.data.published;
     if (!parsed.data.published) data.publishedAt = null;
   }
-  const publishing = parsed.data.published === true;
+  const togglingPublish = parsed.data.published !== undefined;
+  const wantsPublish = parsed.data.published === true;
 
   try {
     const updated = await db.$transaction(async (tx) => {
-      if (publishing) {
-        // Atomic first-publish stamp: only writes when publishedAt is
-        // still null, so a republish is a no-op here.
-        await tx.article.updateMany({
-          where: { id: existing.id, publishedAt: null },
-          data: { publishedAt: new Date() },
-        });
+      if (togglingPublish) {
+        // Row-lock for the read-modify-write on publishedAt. Without
+        // FOR UPDATE two writers can interleave:
+        //   1. republish probes publishedAt (sees T1 → no stamp needed);
+        //   2. concurrent unpublish commits publishedAt = null;
+        //   3. republish's main update lands `published = true` alone,
+        //      leaving published=true with publishedAt=null.
+        // Locking the row for the whole transaction serializes any two
+        // PATCHes that touch `published`, so the stamp decision below
+        // sees the committed state that the update will actually mutate.
+        const rows = await tx.$queryRaw<Array<{ publishedAt: Date | null }>>`
+          SELECT "publishedAt" FROM "Article" WHERE "id" = ${existing.id} FOR UPDATE
+        `;
+        if (rows.length === 0) {
+          // Concurrent DELETE landed after our ownership lookup — surface
+          // as the documented 404 via the P2025 catch below.
+          throw new Prisma.PrismaClientKnownRequestError("Article gone", {
+            code: "P2025",
+            clientVersion: Prisma.prismaVersion.client,
+          });
+        }
+        // First-publish stamp: only when currently null. A republish
+        // (publishedAt already set) is a no-op here → the original
+        // publication time is preserved.
+        if (wantsPublish && rows[0]!.publishedAt === null) {
+          data.publishedAt = new Date();
+        }
       }
       return tx.article.update({
         where: { id: existing.id },
