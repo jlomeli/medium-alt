@@ -42,7 +42,13 @@ test.describe("@regression article editor", () => {
     await expect(form.boldButton).toHaveAttribute("aria-pressed", "true");
     await form.submit();
 
-    await expect(loggedInPage).toHaveURL(/\/articles\/[a-z0-9-]+$/);
+    // The client `router.push` after a successful publish lands on
+    // `/articles/<slug>-<8-hex>` — wait for that URL specifically. A
+    // looser `/\/articles\/[a-z0-9-]+$/` also matches `/articles/new`
+    // (which is where we started), so the assertion could pass before
+    // the navigation happens and `loggedInPage.url()` would still be
+    // `/articles/new` when the next line reads it.
+    await loggedInPage.waitForURL(/\/articles\/[a-z][a-z0-9-]*-[a-f0-9]{8}$/);
     const read = new ArticleReadPage(page);
     await read.gotoSlug(
       new URL(loggedInPage.url()).pathname.replace(/^\/articles\//, ""),
@@ -76,6 +82,9 @@ test.describe("@regression article editor", () => {
     await form.applyLinkToAll("https://example.com/here");
     await form.submit();
 
+    // See the Bold test above for why we wait for the slug URL rather
+    // than trusting `loggedInPage.url()` immediately after `submit()`.
+    await loggedInPage.waitForURL(/\/articles\/[a-z][a-z0-9-]*-[a-f0-9]{8}$/);
     const read = new ArticleReadPage(page);
     await read.gotoSlug(
       new URL(loggedInPage.url()).pathname.replace(/^\/articles\//, ""),

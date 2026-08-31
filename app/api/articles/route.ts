@@ -41,7 +41,11 @@ export async function POST(req: Request) {
           slug: slugify(title),
           title,
           subtitle: subtitle && subtitle.length > 0 ? subtitle : null,
-          body: articleBody,
+          // Zod already validated the doc shape (see
+          // `bodySchema` / `tiptapDocSchema`); Prisma's `InputJsonValue`
+          // is stricter than our loose Tiptap type, so cast at the
+          // boundary.
+          body: articleBody as unknown as Prisma.InputJsonValue,
           published,
           publishedAt: published ? new Date() : null,
           authorId: session.user.id,

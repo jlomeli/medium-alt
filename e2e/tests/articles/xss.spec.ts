@@ -21,6 +21,11 @@ test.describe("@regression article renderer XSS defenses", () => {
     await form.typeBody(hostile);
     await form.submit();
 
+    // `submit()` resolves on the POST response; the client
+    // `router.push('/articles/<slug>')` runs afterwards. Wait for the
+    // slug URL to settle before reading `loggedInPage.url()` — the
+    // regex is tight enough to exclude the starting `/articles/new`.
+    await loggedInPage.waitForURL(/\/articles\/[a-z][a-z0-9-]*-[a-f0-9]{8}$/);
     const read = new ArticleReadPage(page);
     await read.gotoSlug(
       new URL(loggedInPage.url()).pathname.replace(/^\/articles\//, ""),

@@ -1,4 +1,5 @@
 import { test, expect } from "@e2e/support/fixtures";
+import { plainTextToTiptap } from "@e2e/support/factories/article.factory";
 
 /** HTTP contract for the 4 CRUD endpoints — docs/specs/articles-crud.md. */
 
@@ -13,7 +14,9 @@ test.describe("@smoke @api articles crud", () => {
     articleFactory,
   }) => {
     const attrs = articleFactory.build({ published: true });
-    const res = await loggedInPage.request.post("/api/articles", { data: attrs });
+    const res = await loggedInPage.request.post("/api/articles", {
+      data: { ...attrs, body: plainTextToTiptap(attrs.body) },
+    });
     expect(res.status()).toBe(201);
     const body = (await res.json()) as { article: { slug: string; title: string } };
     expect(body.article.title).toBe(attrs.title);
@@ -23,8 +26,9 @@ test.describe("@smoke @api articles crud", () => {
   });
 
   test("POST /api/articles — 400 on missing title", async ({ loggedInPage, articleFactory }) => {
+    const attrs = articleFactory.build();
     const res = await loggedInPage.request.post("/api/articles", {
-      data: { ...articleFactory.build(), title: "" },
+      data: { ...attrs, title: "", body: plainTextToTiptap(attrs.body) },
     });
     expect(res.status()).toBe(400);
     expect((await res.json()) as { error: { field: string } }).toMatchObject({

@@ -116,6 +116,13 @@ export class ArticleFormPage extends BasePage {
    * into real paragraph splits by pressing Enter twice — matches what
    * a human would do and lets the Tiptap doc structure mirror the
    * plain-text-with-newlines convention the factory uses.
+   *
+   * For each paragraph, uses `keyboard.insertText` (a single `input`
+   * event carrying the whole string) rather than `pressSequentially`
+   * (one keystroke per char). Char-by-char is unacceptably slow at
+   * the max-body-size cap (40k chars ≈ 400s at 10ms/keystroke) and
+   * offers no extra coverage — ProseMirror's paste/composition paths
+   * both funnel through the same input event listener.
    */
   async typeBody(text: string): Promise<void> {
     await this.bodyEditor.click();
@@ -125,7 +132,7 @@ export class ArticleFormPage extends BasePage {
         await this.bodyEditor.press("Enter");
         await this.bodyEditor.press("Enter");
       }
-      await this.bodyEditor.pressSequentially(paragraphs[i]!);
+      await this.page.keyboard.insertText(paragraphs[i]!);
     }
   }
 
