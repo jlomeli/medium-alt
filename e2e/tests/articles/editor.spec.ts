@@ -53,6 +53,10 @@ test.describe("@regression article editor", () => {
     await read.gotoSlug(
       new URL(loggedInPage.url()).pathname.replace(/^\/articles\//, ""),
     );
+    // TODO: fix locator — bold is a rendered-HTML detail (<strong>) with
+    // no matching ARIA role; no getByRole path exists for "this text is
+    // bold". CSS is the only way to assert the mark actually reached the
+    // DOM.
     await expect(read.body.locator("strong")).toHaveText("Hello world");
   });
 

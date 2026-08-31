@@ -144,14 +144,19 @@ test.describe("@smoke read article", () => {
       "rel",
       /noopener/,
     );
-    // Bold — <strong> resolves to `text` role in an accessibility tree,
-    // so match via text presence + rendered tag. `locator('strong')` is
-    // fine here because the assertion targets a rendered-HTML detail
-    // that has no accessible-name equivalent.
-    // TODO: fix locator — no accessible role covers "this text is bold";
-    // rendered-HTML-only assertion.
+    // The next three assertions all reach for `locator(<css>)` because
+    // each targets a rendered-HTML detail with no accessible-role
+    // equivalent (bold is inline text; blockquote and code blocks have
+    // no default ARIA role that Playwright's getByRole surfaces). CSS
+    // is the only path from a Tiptap mark/node to a DOM assertion here.
+    // TODO: fix locator — <strong> has no ARIA role covering "this text
+    // is bold"; rendered-HTML-only assertion.
     await expect(read.body.locator("strong")).toHaveText("bold text");
+    // TODO: fix locator — <blockquote> has no default ARIA role, so
+    // getByRole can't reach it.
     await expect(read.body.locator("blockquote")).toContainText("A quote.");
+    // TODO: fix locator — <pre><code> has no default ARIA role; the code
+    // block is a rendered-HTML-only structure.
     await expect(read.body.locator("pre code")).toContainText("code goes here");
   });
 });
