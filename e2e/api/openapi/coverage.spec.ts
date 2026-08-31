@@ -27,6 +27,9 @@ import path from "node:path";
 const EXCLUDED_PATHS = new Set<string>([
   // Dev/E2E-only seam, guarded by NODE_ENV + VERCEL_ENV + E2E env vars.
   "/api/test/password-reset/expire",
+  // E2E-only upload-serve stub, gated on `E2E=1` at the handler (404 in
+  // every other env). See docs/specs/articles-images.md § Testing seams.
+  "/api/__test-uploads/{key}",
   // Auth.js catch-all. Third-party contract; we document only our custom
   // endpoints alongside it (register, login, password-reset/*).
   "/api/auth/{...nextauth}",

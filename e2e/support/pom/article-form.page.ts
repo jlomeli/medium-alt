@@ -46,6 +46,19 @@ export class ArticleFormPage extends BasePage {
   readonly undoButton;
   readonly redoButton;
 
+  // Slice 4c — cover image + inline image.
+  readonly coverImageButton;
+  readonly changeCoverButton;
+  readonly removeCoverButton;
+  readonly coverImagePreview;
+  readonly coverAltField;
+
+  readonly addImageButton;
+  readonly altTextDialog;
+  readonly altTextField;
+  readonly altTextConfirm;
+  readonly altTextCancel;
+
   constructor(page: Page) {
     super(page);
     this.newHeading = this.page.getByRole("heading", { name: "New article" });
@@ -76,6 +89,40 @@ export class ArticleFormPage extends BasePage {
     this.linkButton = this.toolbar.getByRole("button", { name: "Link" });
     this.undoButton = this.toolbar.getByRole("button", { name: "Undo" });
     this.redoButton = this.toolbar.getByRole("button", { name: "Redo" });
+
+    // Cover-image affordances (see docs/specs/articles-images.md
+    // § Acceptance criteria — Cover image). The empty-state button
+    // reads "Upload cover image"; once a cover is set it becomes
+    // "Change cover image", and a "Remove cover image" button
+    // appears alongside. The rendered preview is discoverable via
+    // `getByRole('img', { name: /* alt */ })` — under `<img alt="">`
+    // (decorative), no accessible name is exposed, so this locator
+    // uses `role: 'img'` scoped to the form + a distinguishing
+    // class-agnostic ancestor via the alt-field's presence.
+    this.coverImageButton = this.page.getByRole("button", {
+      name: "Upload cover image",
+    });
+    this.changeCoverButton = this.page.getByRole("button", {
+      name: "Change cover image",
+    });
+    this.removeCoverButton = this.page.getByRole("button", {
+      name: "Remove cover image",
+    });
+    // The preview `<img>` sits directly under the "Cover image" label
+    // paragraph. Scope by role — the article-body region (also a
+    // section labelled "Body") lives BELOW the form and shouldn't
+    // pick up here since this POM is only used on the edit/new
+    // pages.
+    this.coverImagePreview = this.page.getByRole("img");
+    this.coverAltField = this.page.getByLabel(/cover alt text/i);
+
+    this.addImageButton = this.toolbar.getByRole("button", { name: "Add image" });
+    this.altTextDialog = this.page.getByRole("dialog", { name: /alt text/i });
+    this.altTextField = this.altTextDialog.getByLabel("Alt text");
+    this.altTextConfirm = this.altTextDialog.getByRole("button", {
+      name: /insert/i,
+    });
+    this.altTextCancel = this.altTextDialog.getByRole("button", { name: /cancel/i });
   }
 
   async gotoNew(): Promise<void> {
@@ -178,6 +225,69 @@ export class ArticleFormPage extends BasePage {
       ),
       this.deleteButton.click(),
     ]);
+  }
+
+  /**
+   * Upload a cover image. Playwright's `setInputFiles` targets the
+   * hidden `<input type="file">` directly (identified by its `accept`
+   * attribute matching the upload MIME allowlist), sidestepping the
+   * visible-button click that would open the OS file picker in a
+   * real browser. Waits for the POST /api/uploadthing round-trip
+   * before returning so downstream state assertions don't race the
+   * upload.
+   */
+  async uploadCover(input: {
+    buffer: Buffer;
+    filename: string;
+    mime: string;
+  }): Promise<void> {
+    const fileInput = this.page.locator('input[type="file"]').first();
+    await Promise.all([
+      this.page.waitForResponse(
+        (res) =>
+          res.url().endsWith("/api/uploadthing") &&
+          res.request().method() === "POST",
+      ),
+      fileInput.setInputFiles({
+        name: input.filename,
+        mimeType: input.mime,
+        buffer: input.buffer,
+      }),
+    ]);
+  }
+
+  /**
+   * End-to-end helper for the inline image flow: click "Add image",
+   * set the file on the hidden picker inside the editor, wait for
+   * the upload to complete, fill the alt-text dialog, confirm.
+   *
+   * Assumes the alt-text dialog opens on upload success (the editor
+   * behavior spec'd in docs/specs/articles-images.md § UI surface).
+   */
+  async uploadInlineImage(
+    input: { buffer: Buffer; filename: string; mime: string },
+    opts: { alt: string },
+  ): Promise<void> {
+    await this.addImageButton.click();
+    // The editor has its own hidden file input in addition to the
+    // cover-image one, so scope by `nth`: the cover input is first
+    // in DOM order, the editor's input is second.
+    const editorFileInput = this.page.locator('input[type="file"]').nth(1);
+    await Promise.all([
+      this.page.waitForResponse(
+        (res) =>
+          res.url().endsWith("/api/uploadthing") &&
+          res.request().method() === "POST",
+      ),
+      editorFileInput.setInputFiles({
+        name: input.filename,
+        mimeType: input.mime,
+        buffer: input.buffer,
+      }),
+    ]);
+    await this.altTextDialog.waitFor({ state: "visible" });
+    await this.altTextField.fill(opts.alt);
+    await this.altTextConfirm.click();
   }
 
   async submit(): Promise<void> {

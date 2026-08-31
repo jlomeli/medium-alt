@@ -12,6 +12,10 @@ export interface ArticleView {
   title: string;
   subtitle: string | null;
   body: string;
+  /** Slice 4c — cover image URL. Null when the author hasn't set one. */
+  coverImageUrl: string | null;
+  /** Slice 4c — cover alt. Null → decorative (renderer emits `alt=""`). */
+  coverImageAlt: string | null;
   published: boolean;
   publishedAt: Date | null;
   createdAt: Date;
@@ -29,6 +33,8 @@ export const articleViewSelect = {
   title: true,
   subtitle: true,
   body: true,
+  coverImageUrl: true,
+  coverImageAlt: true,
   published: true,
   publishedAt: true,
   createdAt: true,

@@ -1,7 +1,15 @@
 import { test, expect } from "@e2e/support/fixtures";
 import { plainTextToTiptap } from "@e2e/support/factories/article.factory";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import {
+  STUB_UPLOAD_BASE_URL,
+  STUB_FORCE_DELETE_FAIL_KEY,
+} from "@/lib/uploads/storage";
 
 /** HTTP contract for the 4 CRUD endpoints — docs/specs/articles-crud.md. */
+
+const STUB_UPLOAD_DIR = join(process.cwd(), "test-results", "uploads");
 
 test.describe("@smoke @api articles crud", () => {
   test("POST /api/articles — 401 unauthenticated", async ({ api, articleFactory }) => {
@@ -190,6 +198,207 @@ test.describe("@smoke @api articles crud", () => {
     const body = (await res.json()) as { article: { body: unknown } };
     expect(typeof body.article.body).toBe("object");
     expect((body.article.body as { type: string }).type).toBe("doc");
+  });
+
+  // --------- Slice 4c: cover image + delete cascade ---------
+
+  test("POST /api/articles — cover image URL + alt echoed on GET", async ({
+    loggedInPage,
+    articleFactory,
+    imageFactory,
+  }) => {
+    // Upload a real file first — the stub records it on disk, and the
+    // returned URL matches the host allowlist (both real + E2E stub
+    // prefixes are considered allowed under `E2E=1`).
+    const png = imageFactory.tinyPng();
+    const uploadRes = await loggedInPage.request.post("/api/uploadthing", {
+      multipart: {
+        file: { name: png.filename, mimeType: png.mime, buffer: png.buffer },
+      },
+    });
+    expect(uploadRes.status()).toBe(200);
+    const uploadBody = (await uploadRes.json()) as { files: Array<{ url: string }> };
+    const url = uploadBody.files[0]!.url;
+
+    const attrs = articleFactory.build({ published: true });
+    const created = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...attrs,
+        body: plainTextToTiptap(attrs.body),
+        coverImageUrl: url,
+        coverImageAlt: "a stub cover",
+      },
+    });
+    expect(created.status()).toBe(201);
+    const createdBody = (await created.json()) as {
+      article: { slug: string; coverImageUrl: string | null; coverImageAlt: string | null };
+    };
+    expect(createdBody.article.coverImageUrl).toBe(url);
+    expect(createdBody.article.coverImageAlt).toBe("a stub cover");
+
+    const readRes = await loggedInPage.request.get(
+      `/api/articles/${createdBody.article.slug}`,
+    );
+    expect(readRes.status()).toBe(200);
+    const readBody = (await readRes.json()) as {
+      article: { coverImageUrl: string | null; coverImageAlt: string | null };
+    };
+    expect(readBody.article.coverImageUrl).toBe(url);
+    expect(readBody.article.coverImageAlt).toBe("a stub cover");
+  });
+
+  test("PATCH /api/articles/{slug} — coverImageUrl: null clears both", async ({
+    loggedInPage,
+    articleFactory,
+    imageFactory,
+  }) => {
+    const png = imageFactory.tinyPng();
+    const uploadRes = await loggedInPage.request.post("/api/uploadthing", {
+      multipart: {
+        file: { name: png.filename, mimeType: png.mime, buffer: png.buffer },
+      },
+    });
+    const { files } = (await uploadRes.json()) as { files: Array<{ url: string }> };
+    const url = files[0]!.url;
+
+    const attrs = articleFactory.build();
+    const created = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...attrs,
+        body: plainTextToTiptap(attrs.body),
+        coverImageUrl: url,
+        coverImageAlt: "before clear",
+      },
+    });
+    const createdBody = (await created.json()) as { article: { slug: string } };
+
+    const patch = await loggedInPage.request.patch(
+      `/api/articles/${createdBody.article.slug}`,
+      { data: { coverImageUrl: null } },
+    );
+    expect(patch.status()).toBe(200);
+    const patchBody = (await patch.json()) as {
+      article: { coverImageUrl: string | null; coverImageAlt: string | null };
+    };
+    expect(patchBody.article.coverImageUrl).toBeNull();
+    expect(patchBody.article.coverImageAlt).toBeNull();
+  });
+
+  test("POST /api/articles — off-host image src in body → 400", async ({
+    loggedInPage,
+    articleFactory,
+  }) => {
+    const attrs = articleFactory.build();
+    const res = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...attrs,
+        body: {
+          type: "doc",
+          content: [
+            {
+              type: "image",
+              attrs: {
+                src: "https://evil.example/pixel.png",
+                alt: "not on the allowlist",
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()) as { error: { field: string } }).toMatchObject({
+      error: { field: "body" },
+    });
+  });
+
+  test("DELETE cascade — cover + inline image files are removed", async ({
+    loggedInPage,
+    articleFactory,
+    imageFactory,
+  }) => {
+    // Three uploads: cover + two inline body images.
+    const uploads = await Promise.all(
+      [imageFactory.tinyPng(), imageFactory.tinyJpeg(), imageFactory.tinyGif()].map(
+        async (asset) => {
+          const res = await loggedInPage.request.post("/api/uploadthing", {
+            multipart: {
+              file: { name: asset.filename, mimeType: asset.mime, buffer: asset.buffer },
+            },
+          });
+          const body = (await res.json()) as { files: Array<{ url: string; key: string }> };
+          return body.files[0]!;
+        },
+      ),
+    );
+    const [cover, inlineA, inlineB] = uploads;
+
+    // Sanity: all three files exist on disk before the delete.
+    for (const u of uploads) {
+      expect(existsSync(join(STUB_UPLOAD_DIR, u!.key))).toBe(true);
+    }
+
+    const attrs = articleFactory.build();
+    const created = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...attrs,
+        coverImageUrl: cover!.url,
+        coverImageAlt: "cover",
+        body: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "one" }],
+            },
+            { type: "image", attrs: { src: inlineA!.url, alt: "inline-a" } },
+            { type: "image", attrs: { src: inlineB!.url, alt: "inline-b" } },
+          ],
+        },
+      },
+    });
+    expect(created.status()).toBe(201);
+    const { article } = (await created.json()) as { article: { slug: string } };
+
+    const del = await loggedInPage.request.delete(`/api/articles/${article.slug}`);
+    expect(del.status()).toBe(204);
+
+    // Every corresponding stub file is gone.
+    for (const u of uploads) {
+      expect(existsSync(join(STUB_UPLOAD_DIR, u!.key))).toBe(false);
+    }
+  });
+
+  test("DELETE cascade — storage failure still returns 204", async ({
+    loggedInPage,
+    articleFactory,
+  }) => {
+    // Point the cover at the stub's magic force-fail key so the
+    // stub's `deleteFiles` throws inside the cascade. The DELETE
+    // handler catches + logs; the request must still succeed.
+    // No real file needs to exist — the storage adapter's unlink
+    // path is idempotent for missing keys, but this test never
+    // reaches that path because the throw fires first.
+    const url = `${STUB_UPLOAD_BASE_URL}${STUB_FORCE_DELETE_FAIL_KEY}`;
+    const attrs = articleFactory.build();
+    const created = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...attrs,
+        body: plainTextToTiptap(attrs.body),
+        coverImageUrl: url,
+        coverImageAlt: "will fail to delete",
+      },
+    });
+    expect(created.status()).toBe(201);
+    const { article } = (await created.json()) as { article: { slug: string } };
+
+    const del = await loggedInPage.request.delete(`/api/articles/${article.slug}`);
+    expect(del.status()).toBe(204);
+
+    // Follow-up GET is 404 — the row is gone even though the
+    // cascade rejected. The DB is the source of truth.
+    const gone = await loggedInPage.request.get(`/api/articles/${article.slug}`);
+    expect(gone.status()).toBe(404);
   });
 
   test("DELETE /api/articles/{slug} — author 204, unknown / non-author 404, unauth 401", async ({

@@ -78,7 +78,11 @@ export default defineConfig({
         stdout: "pipe",
         stderr: "pipe",
         // Enables env-gated test seams under /api/test/* — see
-        // docs/specs/auth.md §Testing seams.
-        env: { E2E: "1" },
+        // docs/specs/auth.md §Testing seams. `NEXT_PUBLIC_E2E` is the
+        // client-visible counterpart: Next only inlines `NEXT_PUBLIC_*`
+        // env vars into the browser bundle, and the article form's
+        // client-side Zod pre-submit needs the same upload-host
+        // allowlist as the server. See lib/uploads/host-allowlist.ts.
+        env: { E2E: "1", NEXT_PUBLIC_E2E: "1" },
       },
 });

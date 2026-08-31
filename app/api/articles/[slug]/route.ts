@@ -13,6 +13,9 @@ import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { updateArticleSchema } from "@/lib/validation/article";
 import { articleViewSelect } from "@/lib/articles/view";
+import { collectImageKeys } from "@/lib/articles/image-keys";
+import { getStorage } from "@/lib/uploads/storage";
+import type { TiptapDoc } from "@/lib/articles/tiptap";
 
 export async function GET(
   _req: Request,
@@ -76,6 +79,8 @@ export async function PATCH(
     body?: Prisma.InputJsonValue;
     published?: boolean;
     publishedAt?: Date | null;
+    coverImageUrl?: string | null;
+    coverImageAlt?: string | null;
   } = {};
   if (parsed.data.title !== undefined) data.title = parsed.data.title;
   if (parsed.data.subtitle !== undefined) {
@@ -86,6 +91,29 @@ export async function PATCH(
   // is stricter than our loose type, so cast at the boundary.
   if (parsed.data.body !== undefined) {
     data.body = parsed.data.body as unknown as Prisma.InputJsonValue;
+  }
+  // Slice 4c — cover image update rules:
+  // - PATCH `coverImageUrl: null` clears both fields (§ API contract:
+  //   "Passing coverImageUrl: null clears both on the row").
+  // - PATCH `coverImageUrl: <url>` sets the URL; alt follows the payload
+  //   (undefined → leave existing alt untouched; null / "" → clear).
+  // - PATCH `coverImageAlt` alone (without touching the URL) updates the
+  //   alt in-place.
+  if (parsed.data.coverImageUrl !== undefined) {
+    data.coverImageUrl = parsed.data.coverImageUrl;
+    if (parsed.data.coverImageUrl === null) {
+      data.coverImageAlt = null;
+    } else if (parsed.data.coverImageAlt !== undefined) {
+      data.coverImageAlt =
+        parsed.data.coverImageAlt && parsed.data.coverImageAlt.length > 0
+          ? parsed.data.coverImageAlt
+          : null;
+    }
+  } else if (parsed.data.coverImageAlt !== undefined) {
+    data.coverImageAlt =
+      parsed.data.coverImageAlt && parsed.data.coverImageAlt.length > 0
+        ? parsed.data.coverImageAlt
+        : null;
   }
   // Publish semantics: first publish sets publishedAt = now(); republish
   // keeps the original; unpublish clears it. See spec § Publish semantics.
@@ -158,13 +186,51 @@ export async function DELETE(
   }
 
   const { slug } = await params;
-  // Atomic ownership check + delete via `deleteMany` — no TOCTOU window
-  // between "look up authorId" and "delete row".
-  const result = await db.article.deleteMany({
-    where: { slug, authorId: session.user.id },
-  });
-  if (result.count === 0) {
+
+  // Slice 4c — DELETE cascades cover + inline image uploads. We need
+  // the row's `coverImageUrl` + `body` to compute the keys, so read +
+  // delete inside a transaction (no TOCTOU: the SELECT + DELETE
+  // serialize against a concurrent PATCH that would change the body).
+  // The cascade itself runs AFTER the tx commits so a slow / failed
+  // storage call never blocks or rolls back the DB row. See spec §
+  // Delete-cascade (best-effort) and Decision 6.
+  let removed: { coverImageUrl: string | null; body: unknown } | null = null;
+  try {
+    removed = await db.$transaction(async (tx) => {
+      const row = await tx.article.findFirst({
+        where: { slug, authorId: session.user.id },
+        select: { id: true, coverImageUrl: true, body: true },
+      });
+      if (!row) return null;
+      await tx.article.delete({ where: { id: row.id } });
+      return { coverImageUrl: row.coverImageUrl, body: row.body };
+    });
+  } catch (err) {
+    // Bubble unexpected errors as 500 — the row state is unknown.
+    console.error("[articles.DELETE] transactional delete failed", err);
+    throw err;
+  }
+
+  if (!removed) {
+    // Both "row missing" and "row owned by someone else" collapse to
+    // the same 404 — see the anti-enumeration note at the top of the file.
     return NextResponse.json({ error: "not-found" }, { status: 404 });
   }
+
+  // Best-effort file cascade. Failures are logged with the article id
+  // + intended keys so a follow-up prune can catch orphans, but the
+  // request still returns 204 — the DB row is the source of truth.
+  const keys = collectImageKeys({
+    coverImageUrl: removed.coverImageUrl,
+    body: removed.body as TiptapDoc,
+  });
+  if (keys.length > 0) {
+    try {
+      await getStorage().deleteFiles(keys);
+    } catch (err) {
+      console.warn("[articles.DELETE] storage.deleteFiles failed", { slug, keys, err });
+    }
+  }
+
   return new NextResponse(null, { status: 204 });
 }

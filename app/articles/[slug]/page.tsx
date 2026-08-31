@@ -25,6 +25,8 @@ export default async function ArticleReadPage({
         title: true,
         subtitle: true,
         body: true,
+        coverImageUrl: true,
+        coverImageAlt: true,
         published: true,
         publishedAt: true,
         authorId: true,
@@ -47,6 +49,25 @@ export default async function ArticleReadPage({
   return (
     <main className="mx-auto max-w-2xl p-6">
       <article>
+        {/*
+          Cover image hero. Rendered ABOVE the title per spec §
+          Cover image / § UI surface. `alt=""` when the author left
+          the alt blank — the image is decorative in that case, and
+          an empty alt is the a11y-correct way to say "skip this."
+          Using a plain `<img>` (not next/image) keeps the render
+          path off any next.config allowlist — the URL is already
+          gated by the server-side upload-host allowlist.
+        */}
+        {article.coverImageUrl && (
+          <figure className="mb-6">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={article.coverImageUrl}
+              alt={article.coverImageAlt ?? ""}
+              className="w-full rounded-md object-cover"
+            />
+          </figure>
+        )}
         <h1 className="font-serif text-4xl font-bold">{article.title}</h1>
         {!article.published && (
           <p className="mt-2 inline-block rounded-md bg-yellow-100 px-2 py-0.5 text-sm text-yellow-900">
