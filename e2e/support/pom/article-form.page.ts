@@ -6,6 +6,20 @@ import { BasePage } from "./base.page";
  * `/articles/[slug]/edit`. The two URLs share the same field layout, so
  * one POM handles both; `.gotoNew()` and `.gotoEdit(slug)` pick the
  * navigation target.
+ *
+ * ## 4b: editor surface
+ *
+ * `bodyEditor` reaches the Tiptap ProseMirror surface via `getByRole
+ * ('textbox', { name: 'Body' })`. The editor component must render its
+ * `EditorContent` with `aria-label="Body"` (and, if ProseMirror doesn't
+ * set it natively, `role="textbox"`) so the role locator resolves —
+ * this is the same accessibility bar every other form field on the app
+ * hits; no `data-testid` escape hatch.
+ *
+ * Toolbar buttons are all `getByRole('button', { name })` — no icon-only
+ * buttons, no `aria-label` sprinkling; the toolbar container gets
+ * `role="toolbar"` so `getByRole('toolbar')` scopes searches when we
+ * need to disambiguate.
  */
 export class ArticleFormPage extends BasePage {
   readonly url = "/articles/new";
@@ -14,10 +28,23 @@ export class ArticleFormPage extends BasePage {
   readonly editHeading;
   readonly titleField;
   readonly subtitleField;
-  readonly bodyField;
+  readonly bodyEditor;
   readonly publishedCheckbox;
   readonly saveButton;
   readonly deleteButton;
+
+  readonly toolbar;
+  readonly boldButton;
+  readonly italicButton;
+  readonly h2Button;
+  readonly h3Button;
+  readonly bulletListButton;
+  readonly orderedListButton;
+  readonly blockquoteButton;
+  readonly codeBlockButton;
+  readonly linkButton;
+  readonly undoButton;
+  readonly redoButton;
 
   constructor(page: Page) {
     super(page);
@@ -27,13 +54,28 @@ export class ArticleFormPage extends BasePage {
     // `getByLabel("Title")` and produce a strict-mode violation.
     this.titleField = this.page.getByLabel("Title", { exact: true });
     this.subtitleField = this.page.getByLabel(/^subtitle/i);
-    this.bodyField = this.page.getByLabel("Body");
+    this.bodyEditor = this.page.getByRole("textbox", { name: "Body" });
     this.publishedCheckbox = this.page.getByRole("checkbox", {
       name: "Publish this article",
     });
     this.saveButton = this.page.getByRole("button", { name: /^(save|publish)/i });
     // Delete only appears on the edit page.
     this.deleteButton = this.page.getByRole("button", { name: "Delete article" });
+
+    // Toolbar — scoped so a same-named button elsewhere on the page
+    // (unlikely, but future-proof) can't collide.
+    this.toolbar = this.page.getByRole("toolbar");
+    this.boldButton = this.toolbar.getByRole("button", { name: "Bold" });
+    this.italicButton = this.toolbar.getByRole("button", { name: "Italic" });
+    this.h2Button = this.toolbar.getByRole("button", { name: "Heading 2" });
+    this.h3Button = this.toolbar.getByRole("button", { name: "Heading 3" });
+    this.bulletListButton = this.toolbar.getByRole("button", { name: "Bullet list" });
+    this.orderedListButton = this.toolbar.getByRole("button", { name: "Numbered list" });
+    this.blockquoteButton = this.toolbar.getByRole("button", { name: "Blockquote" });
+    this.codeBlockButton = this.toolbar.getByRole("button", { name: "Code block" });
+    this.linkButton = this.toolbar.getByRole("button", { name: "Link" });
+    this.undoButton = this.toolbar.getByRole("button", { name: "Undo" });
+    this.redoButton = this.toolbar.getByRole("button", { name: "Redo" });
   }
 
   async gotoNew(): Promise<void> {
@@ -52,11 +94,65 @@ export class ArticleFormPage extends BasePage {
   }): Promise<void> {
     if (input.title !== undefined) await this.titleField.fill(input.title);
     if (input.subtitle !== undefined) await this.subtitleField.fill(input.subtitle);
-    if (input.body !== undefined) await this.bodyField.fill(input.body);
+    if (input.body !== undefined) {
+      // Tiptap's ProseMirror surface is contenteditable — `.fill()` on
+      // a plain string would not work. Clear via Meta+A/Delete, then
+      // type. `pressSequentially` respects the editor's input handling
+      // (including transforming `\n\n` into paragraph splits when the
+      // Enter key fires, which we approximate here).
+      await this.bodyEditor.click();
+      await this.bodyEditor.press("ControlOrMeta+a");
+      await this.bodyEditor.press("Delete");
+      await this.typeBody(input.body);
+    }
     if (input.published !== undefined) {
       if (input.published) await this.publishedCheckbox.check();
       else await this.publishedCheckbox.uncheck();
     }
+  }
+
+  /**
+   * Type into the body editor. Converts blank-line-separated paragraphs
+   * into real paragraph splits by pressing Enter twice — matches what
+   * a human would do and lets the Tiptap doc structure mirror the
+   * plain-text-with-newlines convention the factory uses.
+   */
+  async typeBody(text: string): Promise<void> {
+    await this.bodyEditor.click();
+    const paragraphs = text.split(/\n{2,}/);
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (i > 0) {
+        await this.bodyEditor.press("Enter");
+        await this.bodyEditor.press("Enter");
+      }
+      await this.bodyEditor.pressSequentially(paragraphs[i]!);
+    }
+  }
+
+  /**
+   * Select all body content then click the Bold toolbar button.
+   * Convenience wrapper — tests that only care about the "did clicking
+   * Bold apply Bold" question shouldn't re-implement the selection
+   * choreography.
+   */
+  async applyBoldToAll(): Promise<void> {
+    await this.bodyEditor.click();
+    await this.bodyEditor.press("ControlOrMeta+a");
+    await this.boldButton.click();
+  }
+
+  /**
+   * Select all body content then insert a link. The editor renders a
+   * URL prompt as a `role="dialog"` with a `getByLabel("URL")` field
+   * (documented in the 4b spec); this helper fills + submits it.
+   */
+  async applyLinkToAll(url: string): Promise<void> {
+    await this.bodyEditor.click();
+    await this.bodyEditor.press("ControlOrMeta+a");
+    await this.linkButton.click();
+    const dialog = this.page.getByRole("dialog", { name: /link/i });
+    await dialog.getByLabel("URL").fill(url);
+    await dialog.getByRole("button", { name: /add|apply|ok/i }).click();
   }
 
   /**

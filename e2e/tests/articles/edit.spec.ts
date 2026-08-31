@@ -16,7 +16,10 @@ test.describe("@regression edit article", () => {
     await expect(form.editHeading).toBeVisible();
     await expect(form.titleField).toHaveValue(article.title);
     await expect(form.subtitleField).toHaveValue(article.subtitle!);
-    await expect(form.bodyField).toHaveValue(article.body);
+    // Body is a contenteditable in 4b — assert on rendered text rather
+    // than `toHaveValue`. First paragraph of the factory body is enough
+    // to prove the editor hydrated with the row's stored doc.
+    await expect(form.bodyEditor).toContainText(article.body.split(/\n{2,}/)[0]!);
     await expect(form.publishedCheckbox).not.toBeChecked();
   });
 
