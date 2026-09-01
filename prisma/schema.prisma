@@ -34,6 +34,7 @@ model User {
   sessions            Session[]
   passwordResetTokens PasswordResetToken[]
   articles            Article[]
+  uploads             Upload[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -80,20 +81,41 @@ model VerificationToken {
 // Articles — see docs/specs/articles-crud.md. Body is plain text in
 // slice 4a; migrates to Json for Tiptap in 4b.
 model Article {
-  id          String    @id @default(cuid())
-  slug        String    @unique
-  title       String
-  subtitle    String?
-  body        Json      // Tiptap ProseMirror document. Zod-validated on write (see lib/validation/article.ts).
-  published   Boolean   @default(false)
-  publishedAt DateTime?
-  authorId    String
-  author      User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  slug          String    @unique
+  title         String
+  subtitle      String?
+  body          Json      // Tiptap ProseMirror document. Zod-validated on write (see lib/validation/article.ts).
+  // Cover image (slice 4c): both nullable. `coverImageAlt` is decorative
+  // when null on the read view (`alt=""`), per the spec's a11y decision.
+  coverImageUrl String?
+  coverImageAlt String?
+  published     Boolean   @default(false)
+  publishedAt   DateTime?
+  authorId      String
+  author        User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([authorId])
   @@index([published, publishedAt])
+}
+
+// Uploads (slice 4c). One row per successful POST /api/uploadthing —
+// records who uploaded each file so DELETE /api/articles/{slug}'s
+// best-effort file-cascade can filter keys to those the deleter owns.
+// Without this, an author could copy another user's public UploadThing
+// URL into their own article and, on delete, nuke the original owner's
+// file. See docs/specs/articles-images.md § Delete-cascade.
+model Upload {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  url       String
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([ownerId])
 }
 
 // Password-reset flow — see docs/specs/auth.md. `tokenHash` is sha256(raw);

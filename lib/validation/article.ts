@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import { isAllowedHref } from "@/lib/articles/tiptap-extensions";
+import { isAllowedUploadUrl } from "@/lib/uploads/host-allowlist";
 
 /** 1..120 chars — enough for a headline, short enough to render on one line. */
 export const titleSchema = z
@@ -44,6 +45,9 @@ const ALLOWED_NODE_TYPES = new Set([
   "codeBlock",
   "hardBreak",
   "text",
+  // Slice 4c — inline images. Attrs are validated separately below
+  // (src must be on the upload host allowlist, alt is required).
+  "image",
 ]);
 
 const ALLOWED_MARK_TYPES = new Set(["bold", "italic", "code", "link"]);
@@ -118,9 +122,71 @@ export const tiptapDocSchema = z.object({
 });
 
 /**
- * Body validator. Must be a well-formed Tiptap doc AND fit under the
- * serialized-JSON cap so a single article can't blow the request body
- * or the DB row.
+ * Attrs validator for `image` nodes (slice 4c). Kept out of the
+ * recursive node schema so failures point at `body.<path>` rather
+ * than a generic node-attrs error, and so the a11y rule
+ * ("alt is required, min 1 char") stays visible near the URL rule.
+ *
+ * Called from `bodySchema.superRefine` for every node whose type is
+ * `"image"`.
+ */
+function refineImageAttrs(
+  attrs: Record<string, unknown> | undefined,
+  ctx: z.RefinementCtx,
+  path: (string | number)[],
+): void {
+  const src = attrs?.src;
+  if (typeof src !== "string" || src.length === 0) {
+    ctx.addIssue({ code: "custom", message: "Image src is required", path: [...path, "src"] });
+  } else if (!isAllowedUploadUrl(src)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Image src must be on the upload host allowlist",
+      path: [...path, "src"],
+    });
+  }
+  const alt = attrs?.alt;
+  if (typeof alt !== "string" || alt.length < 1) {
+    // The a11y rule. Screen-reader users are never handed an unlabelled
+    // image; enforcing here means the editor's alt-text dialog is
+    // ergonomics, not the safety fence.
+    ctx.addIssue({ code: "custom", message: "Image alt text is required", path: [...path, "alt"] });
+  } else if (alt.length > 200) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Image alt text must be at most 200 characters",
+      path: [...path, "alt"],
+    });
+  }
+  const title = attrs?.title;
+  if (title !== undefined && (typeof title !== "string" || title.length > 200)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Image title must be at most 200 characters",
+      path: [...path, "title"],
+    });
+  }
+}
+
+/** Walk the doc, invoking `visit(node, path)` for every node reached. */
+function walkNodes(
+  node: TiptapNodeInput,
+  path: (string | number)[],
+  visit: (n: TiptapNodeInput, p: (string | number)[]) => void,
+): void {
+  visit(node, path);
+  if (Array.isArray(node.content)) {
+    node.content.forEach((child, idx) => {
+      walkNodes(child, [...path, "content", idx], visit);
+    });
+  }
+}
+
+/**
+ * Body validator. Must be a well-formed Tiptap doc, fit under the
+ * serialized-JSON cap, and — for slice 4c — every `image` node's
+ * `attrs` must pass `refineImageAttrs` (src on host allowlist + alt
+ * present).
  */
 export const bodySchema = tiptapDocSchema.superRefine((doc, ctx) => {
   const size = Buffer.byteLength(JSON.stringify(doc), "utf8");
@@ -130,13 +196,47 @@ export const bodySchema = tiptapDocSchema.superRefine((doc, ctx) => {
       message: `Body is too large (${size} bytes; max ${MAX_BODY_JSON_BYTES}).`,
     });
   }
+  (doc.content ?? []).forEach((child, idx) => {
+    walkNodes(child, ["content", idx], (n, p) => {
+      if (n.type === "image") {
+        refineImageAttrs(n.attrs, ctx, [...p, "attrs"]);
+      }
+    });
+  });
 });
+
+// -------- Cover image (slice 4c) --------
+
+/**
+ * Cover image URL. Nullable both because we accept `null` from PATCH
+ * to explicitly clear the field, and because articles created before
+ * this slice have no cover. Non-null values must be on the upload
+ * host allowlist (see `lib/uploads/host-allowlist.ts` § Validation).
+ */
+export const coverImageUrlSchema = z
+  .string()
+  .refine(isAllowedUploadUrl, { message: "Cover image URL must be on the upload host allowlist" })
+  .nullable();
+
+/**
+ * Optional cover alt. Unlike inline images, cover alt is NOT required
+ * — cover is a hero more than a content element, and requiring alt
+ * before every save is a form-friction cost we don't want on the
+ * primary create path. Renderer emits `alt=""` (decorative) when null.
+ * See spec § Non-goals: "Alt-text on cover images being required."
+ */
+export const coverImageAltSchema = z
+  .string()
+  .max(200, { message: "Cover alt text must be at most 200 characters" })
+  .nullable();
 
 export const createArticleSchema = z.object({
   title: titleSchema,
   subtitle: subtitleSchema.optional(),
   body: bodySchema,
   published: z.boolean().optional(),
+  coverImageUrl: coverImageUrlSchema.optional(),
+  coverImageAlt: coverImageAltSchema.optional(),
 });
 export type CreateArticleInput = z.infer<typeof createArticleSchema>;
 
@@ -146,6 +246,10 @@ export type CreateArticleInput = z.infer<typeof createArticleSchema>;
  *
  * `slug` is deliberately not present here: it is server-generated at
  * create-time and immutable thereafter (see spec § Non-goals).
+ *
+ * `coverImageUrl: null` explicitly clears the cover on the row (and,
+ * per API contract, `coverImageAlt` is cleared alongside it in the
+ * route handler — a cover-less alt is inert).
  */
 export const updateArticleSchema = z
   .object({
@@ -153,6 +257,8 @@ export const updateArticleSchema = z
     subtitle: subtitleSchema.optional(),
     body: bodySchema.optional(),
     published: z.boolean().optional(),
+    coverImageUrl: coverImageUrlSchema.optional(),
+    coverImageAlt: coverImageAltSchema.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "At least one field must be provided",

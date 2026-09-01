@@ -1,6 +1,7 @@
 import { test as base, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { UserFactory, type CreatedUser } from "./factories/user.factory";
 import { ArticleFactory } from "./factories/article.factory";
+import { ImageFactory } from "./factories/image.factory";
 import { MailpitClient } from "./clients/mailpit.client";
 
 /**
@@ -21,6 +22,7 @@ type Fixtures = {
   api: APIRequestContext;
   userFactory: UserFactory;
   articleFactory: ArticleFactory;
+  imageFactory: ImageFactory;
   testUser: CreatedUser;
   loggedInPage: Page;
   mailpit: MailpitClient;
@@ -41,6 +43,11 @@ export const test = base.extend<Fixtures>({
     // `loggedInPage.request`). Keeping the factory context-free makes it
     // trivial to create articles for multiple authors in the same test.
     await use(new ArticleFactory());
+  },
+
+  imageFactory: async ({}, use) => {
+    // Context-free — the factory produces in-memory Buffers. No cleanup.
+    await use(new ImageFactory());
   },
 
   testUser: async ({ userFactory }, use) => {

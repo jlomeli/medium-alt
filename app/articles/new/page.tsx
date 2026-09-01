@@ -15,7 +15,14 @@ export default async function NewArticlePage() {
   return (
     <ArticleForm
       mode="create"
-      initial={{ title: "", subtitle: "", body: emptyDoc(), published: false }}
+      initial={{
+        title: "",
+        subtitle: "",
+        body: emptyDoc(),
+        coverImageUrl: null,
+        coverImageAlt: null,
+        published: false,
+      }}
     />
   );
 }

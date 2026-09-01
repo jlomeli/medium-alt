@@ -30,7 +30,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const { title, subtitle, body: articleBody, published = false } = parsed.data;
+  const {
+    title,
+    subtitle,
+    body: articleBody,
+    published = false,
+    coverImageUrl,
+    coverImageAlt,
+  } = parsed.data;
 
   // Retry loop guards against the astronomically-unlikely case of an 8-hex
   // suffix collision. See docs/specs/articles-crud.md § Slug generation.
@@ -48,6 +55,13 @@ export async function POST(req: Request) {
           body: articleBody as unknown as Prisma.InputJsonValue,
           published,
           publishedAt: published ? new Date() : null,
+          // Slice 4c — cover image. If the URL is cleared/omitted,
+          // the alt has nothing to hang off, so clear it too. This
+          // mirrors the § API surface note: "a cover-less alt is
+          // inert."
+          coverImageUrl: coverImageUrl ?? null,
+          coverImageAlt:
+            coverImageUrl && coverImageAlt && coverImageAlt.length > 0 ? coverImageAlt : null,
           authorId: session.user.id,
         },
         select: articleViewSelect,

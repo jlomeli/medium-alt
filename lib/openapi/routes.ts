@@ -239,6 +239,11 @@ const articleViewSchema = z.object({
   title: z.string(),
   subtitle: z.string().nullable(),
   body: articleBodyDocSchema,
+  // Slice 4c — cover image fields. Both nullable: `coverImageUrl` is
+  // null when no cover has been set; `coverImageAlt` is null when the
+  // author left it blank (renderer treats as decorative).
+  coverImageUrl: z.string().url().nullable(),
+  coverImageAlt: z.string().nullable(),
   published: z.boolean(),
   publishedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
@@ -316,7 +321,19 @@ registerRoute({
   summary: "Delete an article.",
   description:
     "Author-only. Non-authors get 404 (never 403). Response body is empty; " +
-    "the contract is carried by the 204 status.",
+    "the contract is carried by the 204 status. Slice 4c: after the SQL " +
+    "delete commits, UploadThing files derived from the article's cover + " +
+    "inline `image` node srcs are best-effort deleted from storage. The " +
+    "cascade is scoped by ownership — only keys uploaded by the deleter " +
+    "(tracked in the `Upload` table) are dropped, so copy-pasted URLs " +
+    "from another author's article are never affected. Owned keys still " +
+    "referenced by any of the deleter's OTHER articles (shared cover " +
+    "URL or inline body image) are also kept, so deleting one article " +
+    "never breaks a sibling that shares a file. A failure in the " +
+    "storage call is logged but does NOT fail the request — the DB row " +
+    "is the source of truth. On a rejected storage delete the matching " +
+    "`Upload` rows are kept, so the still-present file retains its " +
+    "durable ownership pointer for a reconciliation / retry job.",
   tags: ["articles"],
   responses: {
     "204": {
@@ -324,6 +341,72 @@ registerRoute({
     },
     "401": { description: "No session cookie.", schema: unauthenticatedSchema },
     "404": { description: "No such article, or caller is not the author.", schema: notFoundSchema },
+  },
+});
+
+// -------- Uploads (docs/specs/articles-images.md § Upload endpoint) --------
+
+const uploadResponseSchema = z.object({
+  files: z.array(
+    z.object({
+      url: z.string().url(),
+      key: z.string(),
+      name: z.string(),
+      size: z.number(),
+      type: z.string(),
+    }),
+  ),
+});
+
+const uploadConfigSchema = z.object({
+  maxBytes: z.number(),
+  allowedMimes: z.array(z.string()),
+});
+
+const uploadErrorSchema = z.object({
+  error: z.enum([
+    "unauthenticated",
+    "invalid-multipart",
+    "no-file",
+    "unsupported-media-type",
+    "payload-too-large",
+    "upload-failed",
+  ]),
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/uploadthing",
+  summary: "Upload an image (cover or inline).",
+  description:
+    "Server-side upload proxy. Accepts `multipart/form-data` with a single " +
+    "`file` field; auth-gated, MIME-restricted to " +
+    "`image/{jpeg,png,webp,gif}`, capped at 5 MB. Returns the persisted " +
+    "URL and key. Under `E2E=1`, storage is routed to an in-process stub " +
+    "that writes to `test-results/uploads/`; in every other env, storage " +
+    "is UploadThing. See docs/specs/articles-images.md § Testing seams.",
+  tags: ["uploads"],
+  responses: {
+    "200": { description: "Uploaded.", schema: uploadResponseSchema },
+    "400": { description: "Malformed multipart or missing file field.", schema: uploadErrorSchema },
+    "401": { description: "No session cookie.", schema: uploadErrorSchema },
+    "413": { description: "File exceeds the 5 MB cap.", schema: uploadErrorSchema },
+    "415": { description: "MIME type outside the allowlist.", schema: uploadErrorSchema },
+    "500": { description: "Storage backend rejected the upload.", schema: uploadErrorSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/uploadthing",
+  summary: "Upload endpoint constraints.",
+  description:
+    "Returns the current MIME allowlist and size cap. No auth required — " +
+    "this describes what the route accepts, not any user data. Used by " +
+    "clients that want to introspect the constraints without doing a probe upload.",
+  tags: ["uploads"],
+  responses: {
+    "200": { description: "Constraints.", schema: uploadConfigSchema },
   },
 });
 

@@ -9,11 +9,14 @@ import {
 } from "@/lib/validation/article";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
 import { ArticleEditor } from "./ArticleEditor";
+import { CoverImageField } from "./CoverImageField";
 
 interface FieldErrors {
   title?: string;
   subtitle?: string;
   body?: string;
+  coverImageUrl?: string;
+  coverImageAlt?: string;
 }
 
 export interface ArticleFormValues {
@@ -21,6 +24,10 @@ export interface ArticleFormValues {
   subtitle: string;
   /** Tiptap ProseMirror doc — the shape stored on `Article.body`. */
   body: TiptapDoc;
+  /** UploadThing (or E2E stub) URL for the cover image. `null` when unset. */
+  coverImageUrl: string | null;
+  /** Author-supplied alt for the cover. `null` when blank (rendered as `alt=""`). */
+  coverImageAlt: string | null;
   published: boolean;
 }
 
@@ -37,6 +44,8 @@ export function ArticleForm({ mode, initial, slug }: Props) {
   const [title, setTitle] = useState(initial.title);
   const [subtitle, setSubtitle] = useState(initial.subtitle);
   const [body, setBody] = useState<TiptapDoc>(initial.body);
+  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(initial.coverImageUrl);
+  const [coverImageAlt, setCoverImageAlt] = useState<string | null>(initial.coverImageAlt);
   const [published, setPublished] = useState(initial.published);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topLevelError, setTopLevelError] = useState<string | null>(null);
@@ -57,6 +66,8 @@ export function ArticleForm({ mode, initial, slug }: Props) {
         title,
         subtitle: subtitle.length > 0 ? subtitle : undefined,
         body,
+        coverImageUrl: coverImageUrl ?? undefined,
+        coverImageAlt: coverImageAlt ?? undefined,
         published,
       });
       if (!parsed.success) {
@@ -71,6 +82,11 @@ export function ArticleForm({ mode, initial, slug }: Props) {
         title,
         subtitle,
         body,
+        // Cover fields are passed explicitly (including `null`) so the
+        // PATCH handler's clear-both branch fires on removal — see spec §
+        // API contract "coverImageUrl: null clears both".
+        coverImageUrl,
+        coverImageAlt,
         published,
       });
       if (!parsed.success) {
@@ -93,6 +109,10 @@ export function ArticleForm({ mode, initial, slug }: Props) {
           title,
           subtitle: subtitle.length > 0 ? subtitle : undefined,
           body,
+          // POST accepts `null` to mean "no cover". PATCH treats `null`
+          // as an explicit clear — both paths encode the same shape.
+          coverImageUrl,
+          coverImageAlt,
           published,
         }),
       });
@@ -196,6 +216,14 @@ export function ArticleForm({ mode, initial, slug }: Props) {
             </p>
           )}
         </div>
+        <CoverImageField
+          value={coverImageUrl}
+          altValue={coverImageAlt}
+          onChange={(next) => {
+            setCoverImageUrl(next.url);
+            setCoverImageAlt(next.alt);
+          }}
+        />
         <div>
           <p id="article-body-label" className="mb-1 block text-sm">
             Body

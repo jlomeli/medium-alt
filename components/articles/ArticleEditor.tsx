@@ -18,9 +18,11 @@
  */
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { articleExtensions } from "@/lib/articles/tiptap-extensions";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
+import { uploadImage, UPLOAD_ERROR_COPY } from "@/lib/uploads/client";
+import { UPLOAD_ACCEPT_ATTR } from "@/lib/uploads/policy";
 
 interface Props {
   value: TiptapDoc;
@@ -60,6 +62,16 @@ export function ArticleEditor({ value, onChange, labelId }: Props) {
 
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
+  // Inline-image flow: hidden file input → upload → alt-text dialog →
+  // `setImage`. `uploadedUrl` holds the fresh URL while the author
+  // types alt text; cancelling the dialog drops it (no orphan node in
+  // the doc). Upload errors surface via a `role="alert"` line under
+  // the editor — same shape as `<CoverImageField>`'s error.
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [altOpen, setAltOpen] = useState(false);
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
 
   if (!editor) {
     // Placeholder markup so tests waiting on `role="toolbar"` don't
@@ -80,6 +92,27 @@ export function ArticleEditor({ value, onChange, labelId }: Props) {
     );
   }
 
+  async function handleImageFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Reset so re-picking the same file re-fires `change`.
+    event.target.value = "";
+    if (!file) return;
+    setUploadingImage(true);
+    setImageError(null);
+    const result = await uploadImage(file);
+    setUploadingImage(false);
+    if (!result.ok) {
+      setImageError(result.message ?? UPLOAD_ERROR_COPY.unknown);
+      return;
+    }
+    // Stash the URL and open the alt-text dialog. The image is NOT yet
+    // in the doc — insertion only happens on confirm, keeping cancel
+    // truly cancel-y (no orphan node, no orphan storage… well, one
+    // orphan file, but that's the trade for a clean UX).
+    setUploadedUrl(result.url);
+    setAltOpen(true);
+  }
+
   return (
     <div>
       <Toolbar
@@ -88,8 +121,33 @@ export function ArticleEditor({ value, onChange, labelId }: Props) {
           setLinkUrl(editor.getAttributes("link").href ?? "");
           setLinkOpen(true);
         }}
+        onAddImage={() => {
+          setImageError(null);
+          imageInputRef.current?.click();
+        }}
+        addImageDisabled={uploadingImage}
+      />
+      {/* Hidden native file input driven by the toolbar's Add-image button. */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept={UPLOAD_ACCEPT_ATTR}
+        onChange={handleImageFile}
+        className="hidden"
+        aria-hidden="true"
+        tabIndex={-1}
       />
       <EditorContent editor={editor} />
+      {uploadingImage && (
+        <p role="status" className="mt-2 text-sm text-neutral-500">
+          Uploading image…
+        </p>
+      )}
+      {imageError && (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {imageError}
+        </p>
+      )}
       {linkOpen && (
         <LinkDialog
           initialUrl={linkUrl}
@@ -105,6 +163,27 @@ export function ArticleEditor({ value, onChange, labelId }: Props) {
           }}
         />
       )}
+      {altOpen && uploadedUrl && (
+        <AltTextDialog
+          onCancel={() => {
+            setAltOpen(false);
+            setUploadedUrl(null);
+          }}
+          onSubmit={(alt) => {
+            // Tiptap's Image extension registers `setImage({ src, alt })`.
+            // Zod's body schema enforces `alt.min(1)` on the server;
+            // the dialog also disables the confirm button while alt is
+            // empty (belt + braces).
+            editor
+              .chain()
+              .focus()
+              .setImage({ src: uploadedUrl, alt })
+              .run();
+            setAltOpen(false);
+            setUploadedUrl(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -114,9 +193,11 @@ export function ArticleEditor({ value, onChange, labelId }: Props) {
 interface ToolbarProps {
   editor: Editor;
   onOpenLink: () => void;
+  onAddImage: () => void;
+  addImageDisabled: boolean;
 }
 
-function Toolbar({ editor, onOpenLink }: ToolbarProps) {
+function Toolbar({ editor, onOpenLink, onAddImage, addImageDisabled }: ToolbarProps) {
   // Force a re-render when the selection changes so `aria-pressed`
   // stays honest. Tiptap's `editor.on('selectionUpdate')` + a state
   // bump is the idiomatic way.
@@ -171,6 +252,9 @@ function Toolbar({ editor, onOpenLink }: ToolbarProps) {
       </TB>
       <TB label="Link" active={editor.isActive("link")} onClick={onOpenLink}>
         🔗
+      </TB>
+      <TB label="Add image" active={false} onClick={onAddImage} disabled={addImageDisabled}>
+        🖼
       </TB>
       <TB label="Undo" active={false} onClick={() => editor.chain().focus().undo().run()}
         disabled={!editor.can().undo()}>
@@ -276,6 +360,83 @@ function LinkDialog({ initialUrl, onCancel, onSubmit }: LinkDialogProps) {
             className="rounded-md bg-black px-3 py-1.5 text-sm text-white"
           >
             Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------- Alt-text dialog --------
+
+interface AltTextDialogProps {
+  onCancel: () => void;
+  onSubmit: (alt: string) => void;
+}
+
+/**
+ * Alt-text prompt shown after a successful inline-image upload. Same
+ * nested-form escape hatch as `<LinkDialog>` — a `<div role="dialog">`
+ * with all buttons `type="button"` and manual Enter/Escape wiring, so
+ * this dialog can't submit the outer `<ArticleForm>`. Confirm is
+ * disabled while alt is empty (spec § Inline images: "screen-reader
+ * users are never handed an image with no description"). The Zod
+ * body schema also enforces `alt.min(1)` server-side.
+ */
+function AltTextDialog({ onCancel, onSubmit }: AltTextDialogProps) {
+  const [alt, setAlt] = useState("");
+  const canSubmit = alt.trim().length > 0;
+  const apply = () => {
+    if (!canSubmit) return;
+    onSubmit(alt);
+  };
+  return (
+    <div
+      role="dialog"
+      aria-label="Add alt text"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          apply();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    >
+      <div className="w-full max-w-md rounded-md bg-white p-4 shadow-lg">
+        <label htmlFor="image-alt" className="mb-1 block text-sm font-medium">
+          Alt text
+        </label>
+        <input
+          id="image-alt"
+          type="text"
+          value={alt}
+          onChange={(e) => setAlt(e.target.value)}
+          maxLength={200}
+          autoFocus
+          className="w-full rounded-md border px-3 py-2"
+        />
+        <p className="mt-1 text-xs text-neutral-500">
+          Describe the image for screen readers. Required.
+        </p>
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border px-3 py-1.5 text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={apply}
+            disabled={!canSubmit}
+            className="rounded-md bg-black px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Insert image
           </button>
         </div>
       </div>

@@ -26,6 +26,8 @@ export default async function EditArticlePage({
       title: true,
       subtitle: true,
       body: true,
+      coverImageUrl: true,
+      coverImageAlt: true,
       published: true,
       authorId: true,
     },
@@ -43,6 +45,8 @@ export default async function EditArticlePage({
         // schema guarantees the stored shape is a Tiptap doc, so a cast
         // at this boundary is safe.
         body: article.body as unknown as TiptapDoc,
+        coverImageUrl: article.coverImageUrl,
+        coverImageAlt: article.coverImageAlt,
         published: article.published,
       }}
     />

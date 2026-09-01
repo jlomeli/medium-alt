@@ -39,6 +39,9 @@ export type ArticleAttrs = {
   title: string;
   subtitle?: string;
   body: string;
+  /** Slice 4c — optional cover image; must be on the upload allowlist. */
+  coverImageUrl?: string | null;
+  coverImageAlt?: string | null;
   published?: boolean;
 };
 

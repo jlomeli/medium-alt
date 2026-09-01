@@ -180,7 +180,13 @@ Add more seams here as future features need them; each one must be gated the
 same way. Two independent skip tags exist so a test's dependencies are
 declarative:
 
-- `@needs-test-seam` — needs `/api/test/*` endpoints (dev/preview only).
+- `@needs-test-seam` — needs an `E2E=1`-gated backdoor: the `/api/test/*`
+  endpoints, the on-disk upload stub (`app/api/__test-uploads/[key]/route.ts`
+  + the `E2EStubStorage` adapter routed through `/api/uploadthing`), or any
+  future seam under the same gate. Runs on local dev and `ci.yml`
+  (`E2E=1` in `pnpm dev`); skipped on the preview e2e job and nightly
+  because neither the Vercel preview nor production ships with `E2E=1`
+  and the on-disk stub has no place to write on serverless anyway.
 - `@needs-mailpit` — needs Mailpit reachable at `localhost:8025`.
 
 Both the nightly-full job (against `PRODUCTION_URL`) and the PR e2e job
