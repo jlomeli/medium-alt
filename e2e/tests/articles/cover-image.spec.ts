@@ -5,8 +5,17 @@ import { ArticleFormPage } from "@e2e/support/pom/article-form.page";
  * Acceptance criteria from docs/specs/articles-images.md § Cover image.
  * Every affordance is `getByRole('button', { name: /cover image/i })`
  * reachable — no `data-testid` on the form.
+ *
+ * Tagged `@needs-test-seam` because uploads route through the E2E stub
+ * storage adapter (gated on `process.env.E2E === "1"`), which writes to
+ * `test-results/uploads/` on the app's file system. Vercel serverless
+ * has no persistent FS and doesn't ship with `E2E=1`, so on the PR
+ * preview `/api/uploadthing` either 500s (missing UploadThing token) or
+ * succeeds against real UploadThing (would leave orphan files in prod
+ * storage). Skipped on the preview e2e workflow; ci.yml + local dev
+ * still run it.
  */
-test.describe("@smoke @regression articles cover image", () => {
+test.describe("@smoke @regression @needs-test-seam articles cover image", () => {
   test("upload cover, publish, hero renders above title on read view", async ({
     loggedInPage,
     articleFactory,
@@ -36,7 +45,7 @@ test.describe("@smoke @regression articles cover image", () => {
   });
 });
 
-test.describe("@regression articles cover image", () => {
+test.describe("@regression @needs-test-seam articles cover image", () => {
   test("change cover replaces the preview URL", async ({
     loggedInPage,
     articleFactory,

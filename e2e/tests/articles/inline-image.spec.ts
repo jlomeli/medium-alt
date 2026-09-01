@@ -7,8 +7,12 @@ import { ArticleFormPage } from "@e2e/support/pom/article-form.page";
  * success, an alt-text dialog gates insertion; confirm inserts the
  * image node at the caret. The read view renders `<img alt>` inside
  * the body region.
+ *
+ * Tagged `@needs-test-seam` for the same reason as cover-image.spec.ts:
+ * the flow drives `/api/uploadthing`, which on a Vercel preview lacks
+ * the `E2E=1` gate that routes uploads through the on-disk stub.
  */
-test.describe("@smoke @regression articles inline image", () => {
+test.describe("@smoke @regression @needs-test-seam articles inline image", () => {
   test("upload image, enter alt, image renders in read view", async ({
     loggedInPage,
     articleFactory,
@@ -33,7 +37,7 @@ test.describe("@smoke @regression articles inline image", () => {
   });
 });
 
-test.describe("@regression articles inline image", () => {
+test.describe("@regression @needs-test-seam articles inline image", () => {
   test("confirm is disabled while alt text is empty", async ({
     loggedInPage,
     articleFactory,
