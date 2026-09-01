@@ -22,6 +22,7 @@ export default async function NewArticlePage() {
         coverImageUrl: null,
         coverImageAlt: null,
         published: false,
+        tags: "",
       }}
     />
   );

@@ -249,6 +249,9 @@ const articleViewSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   author: authorViewSchema,
+  // Slice 5 — sorted tag slugs. Sorted server-side for deterministic
+  // OpenAPI examples + test diffs.
+  tags: z.array(z.string()),
 });
 
 const articleResponseSchema = z.object({ article: articleViewSchema });
@@ -258,7 +261,25 @@ const publicArticleSummarySchema = z.object({
   title: z.string(),
   subtitle: z.string().nullable(),
   publishedAt: z.string().datetime().nullable(),
+  // Slice 5 — additive on this summary. The global feed needs an
+  // author byline on each card, and the existing per-user listing
+  // gains both fields for free (no client breaks; clients that
+  // ignore unknown keys are unaffected).
+  tags: z.array(z.string()),
+  author: authorViewSchema,
 });
+
+const feedResponseSchema = z.object({
+  items: z.array(publicArticleSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+
+const popularTagSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  count: z.number().int().nonnegative(),
+});
+const tagsResponseSchema = z.object({ tags: z.array(popularTagSchema) });
 
 const articlesListSchema = z.object({
   articles: z.array(publicArticleSummarySchema),
@@ -410,6 +431,42 @@ registerRoute({
   },
 });
 
+// -------- Feed + tags (docs/specs/tags-feed.md) --------
+
+registerRoute({
+  method: "get",
+  path: "/api/articles",
+  summary: "Global published-articles feed.",
+  description:
+    "Public — no session required. Drafts never appear, including for " +
+    "the author-as-caller. Cursor pagination on `(publishedAt DESC, " +
+    "id DESC)`; `nextCursor` is `null` when the returned page was the " +
+    "last. Filter to a single tag with `?tag=<slug>`; unknown tag " +
+    "returns 200 with an empty items array (not 404 — same UX story as " +
+    "an empty DB). `limit` defaults to 20, capped at 50.",
+  tags: ["articles"],
+  responses: {
+    "200": { description: "One page of the feed.", schema: feedResponseSchema },
+    "400": { description: "Malformed cursor / out-of-range limit.", schema: fieldErrorSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/tags",
+  summary: "Popular tags.",
+  description:
+    "Public — no session required. Returns the top N tags by count of " +
+    "*published* articles carrying the tag, count descending, ties " +
+    "broken by slug ascending. A tag whose only articles are drafts " +
+    "never appears. `limit` defaults to 20, capped at 50.",
+  tags: ["articles"],
+  responses: {
+    "200": { description: "Popular tags.", schema: tagsResponseSchema },
+    "400": { description: "Out-of-range limit.", schema: fieldErrorSchema },
+  },
+});
+
 registerRoute({
   method: "get",
   path: "/api/users/{username}/articles",
@@ -417,9 +474,9 @@ registerRoute({
   description:
     "Public — no session required. Published-only; drafts never leak (even " +
     "for the author-as-caller — this is a public-shape endpoint only). " +
-    "Response items are the narrow `PublicArticleSummary` shape: `slug`, " +
-    "`title`, `subtitle`, `publishedAt`. Never `body`, never `authorId`, " +
-    "never `author`.",
+    "Response items are the `PublicArticleSummary` shape: `slug`, " +
+    "`title`, `subtitle`, `publishedAt`, `tags`, `author`. Never `body`, " +
+    "never `authorId`.",
   tags: ["articles"],
   responses: {
     "200": { description: "Published articles for the user.", schema: articlesListSchema },

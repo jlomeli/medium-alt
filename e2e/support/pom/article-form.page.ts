@@ -32,6 +32,8 @@ export class ArticleFormPage extends BasePage {
   readonly publishedCheckbox;
   readonly saveButton;
   readonly deleteButton;
+  // Slice 5 — tags input on the article form.
+  readonly tagsField;
 
   readonly toolbar;
   readonly boldButton;
@@ -71,6 +73,7 @@ export class ArticleFormPage extends BasePage {
     this.publishedCheckbox = this.page.getByRole("checkbox", {
       name: "Publish this article",
     });
+    this.tagsField = this.page.getByLabel("Tags", { exact: true });
     this.saveButton = this.page.getByRole("button", { name: /^(save|publish)/i });
     // Delete only appears on the edit page.
     this.deleteButton = this.page.getByRole("button", { name: "Delete article" });
@@ -138,6 +141,8 @@ export class ArticleFormPage extends BasePage {
     subtitle?: string;
     body?: string;
     published?: boolean;
+    /** Comma-separated tag input; server normalises on save. */
+    tags?: string;
   }): Promise<void> {
     if (input.title !== undefined) await this.titleField.fill(input.title);
     if (input.subtitle !== undefined) await this.subtitleField.fill(input.subtitle);
@@ -156,6 +161,7 @@ export class ArticleFormPage extends BasePage {
       if (input.published) await this.publishedCheckbox.check();
       else await this.publishedCheckbox.uncheck();
     }
+    if (input.tags !== undefined) await this.tagsField.fill(input.tags);
   }
 
   /**

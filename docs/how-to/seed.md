@@ -26,6 +26,13 @@ Alice has three published articles + one draft; Bob has two published
 articles. See `prisma/seeds/baseline.ts` for the exact titles and
 slugs.
 
+**Tags** (slice 5): the seeded articles carry `writing`, `intro`,
+`editor`, and `reading`, spread across authors so a fresh
+`pnpm db:seed` lands on a `/` page with populated feed cards, tag
+chips, and a non-empty popular-tags sidebar. See
+`prisma/seeds/baseline.ts` § `BASELINE_TAGS` for the exact
+distribution.
+
 ## Rules
 
 - **Don't use seed data in automated tests.** Tests build their own

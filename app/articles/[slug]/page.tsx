@@ -3,6 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { renderTiptap, type TiptapDoc } from "@/lib/articles/tiptap";
+import { TagChip } from "@/components/feed/TagChip";
 
 /**
  * `/articles/[slug]` — public read view. Drafts are visible only to
@@ -31,6 +32,7 @@ export default async function ArticleReadPage({
         publishedAt: true,
         authorId: true,
         author: { select: { username: true, name: true } },
+        tags: { select: { slug: true } },
       },
     }),
     auth(),
@@ -107,6 +109,18 @@ export default async function ArticleReadPage({
           rejects every node/mark type and unsafe href before the doc
           reaches Prisma, so no post-render sanitizer runs here.
         */}
+        {article.tags.length > 0 && (
+          <ul aria-label="Tags" className="mt-4 flex flex-wrap gap-2">
+            {article.tags
+              .map((t) => t.slug)
+              .sort()
+              .map((slug) => (
+                <li key={slug}>
+                  <TagChip slug={slug} />
+                </li>
+              ))}
+          </ul>
+        )}
         <section
           aria-label="Body"
           className="prose mt-6 max-w-none"

@@ -8,6 +8,7 @@ import {
   updateArticleSchema,
 } from "@/lib/validation/article";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
+import { parseTagInput } from "@/lib/tags/slug";
 import { ArticleEditor } from "./ArticleEditor";
 import { CoverImageField } from "./CoverImageField";
 
@@ -17,6 +18,7 @@ interface FieldErrors {
   body?: string;
   coverImageUrl?: string;
   coverImageAlt?: string;
+  tags?: string;
 }
 
 export interface ArticleFormValues {
@@ -29,6 +31,12 @@ export interface ArticleFormValues {
   /** Author-supplied alt for the cover. `null` when blank (rendered as `alt=""`). */
   coverImageAlt: string | null;
   published: boolean;
+  /**
+   * Slice 5 — comma-separated tag input. Server normalises via
+   * `parseTagInput`. Prefilled from the article's current tag slugs
+   * in edit mode.
+   */
+  tags: string;
 }
 
 interface Props {
@@ -47,6 +55,7 @@ export function ArticleForm({ mode, initial, slug }: Props) {
   const [coverImageUrl, setCoverImageUrl] = useState<string | null>(initial.coverImageUrl);
   const [coverImageAlt, setCoverImageAlt] = useState<string | null>(initial.coverImageAlt);
   const [published, setPublished] = useState(initial.published);
+  const [tags, setTags] = useState(initial.tags);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topLevelError, setTopLevelError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -61,6 +70,11 @@ export function ArticleForm({ mode, initial, slug }: Props) {
     setErrors({});
     setTopLevelError(null);
 
+    // Client-side tag preview → the raw string is parsed the same way
+    // the server will. `[]` (no entries) is submitted as an empty array
+    // so PATCH's "explicitly clear" semantics fire on removal.
+    const parsedTags = parseTagInput(tags).tags.map((t) => t.name);
+
     if (mode === "create") {
       const parsed = createArticleSchema.safeParse({
         title,
@@ -69,6 +83,7 @@ export function ArticleForm({ mode, initial, slug }: Props) {
         coverImageUrl: coverImageUrl ?? undefined,
         coverImageAlt: coverImageAlt ?? undefined,
         published,
+        tags: parsedTags,
       });
       if (!parsed.success) {
         const first = parsed.error.issues[0]!;
@@ -88,6 +103,7 @@ export function ArticleForm({ mode, initial, slug }: Props) {
         coverImageUrl,
         coverImageAlt,
         published,
+        tags: parsedTags,
       });
       if (!parsed.success) {
         const first = parsed.error.issues[0]!;
@@ -114,6 +130,7 @@ export function ArticleForm({ mode, initial, slug }: Props) {
           coverImageUrl,
           coverImageAlt,
           published,
+          tags: parsedTags,
         }),
       });
 
@@ -236,6 +253,37 @@ export function ArticleForm({ mode, initial, slug }: Props) {
           {errors.body && (
             <p role="alert" className="mt-1 text-sm text-red-600">
               {errors.body}
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="mb-1 block text-sm" htmlFor="tags">
+            Tags
+          </label>
+          <input
+            id="tags"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="comma-separated, e.g. writing, editor"
+            aria-describedby="tags-hint"
+            className="w-full rounded-md border px-3 py-2"
+          />
+          <p id="tags-hint" className="mt-1 text-xs text-neutral-500">
+            Up to 5 tags. Normalised to lowercase slugs on save (e.g.
+            &ldquo;Software Testing&rdquo; → &ldquo;software-testing&rdquo;).
+            {parseTagInput(tags).tags.length > 0 && (
+              <>
+                {" "}Will save as{" "}
+                {parseTagInput(tags)
+                  .tags.map((t) => `#${t.slug}`)
+                  .join(", ")}
+                .
+              </>
+            )}
+          </p>
+          {errors.tags && (
+            <p role="alert" className="mt-1 text-sm text-red-600">
+              {errors.tags}
             </p>
           )}
         </div>

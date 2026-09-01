@@ -25,11 +25,15 @@ test.describe("@smoke @api api/users/{username}/articles", () => {
     expect(slugs).toContain(published.slug);
     expect(slugs).not.toContain(draft.slug);
 
-    // Response shape narrow — no body, no authorId.
+    // Response shape narrow — no body, no authorId. `author` and
+    // `tags` are additive slice-5 fields on `PublicArticleSummary`
+    // (see docs/specs/tags-feed.md § PublicArticleSummary — extension);
+    // the older "no author" assertion inverted here as of that slice.
     for (const article of body.articles) {
       expect(article).not.toHaveProperty("body");
       expect(article).not.toHaveProperty("authorId");
-      expect(article).not.toHaveProperty("author");
+      expect(article).toHaveProperty("author");
+      expect(article).toHaveProperty("tags");
     }
 
     // Sanity — userFactory dependency chain is exercised.

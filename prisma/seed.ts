@@ -31,7 +31,8 @@ async function main() {
   const summary = await seedBaseline(db);
   console.log(
     `[seed] baseline: users +${summary.users.created} (skipped ${summary.users.skipped}), ` +
-      `articles +${summary.articles.created} (skipped ${summary.articles.skipped}).`,
+      `articles +${summary.articles.created} (skipped ${summary.articles.skipped}), ` +
+      `tags +${summary.tags.created} (skipped ${summary.tags.skipped}).`,
   );
 }
 

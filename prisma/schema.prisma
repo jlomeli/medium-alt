@@ -94,11 +94,36 @@ model Article {
   publishedAt   DateTime?
   authorId      String
   author        User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  // Tags — see docs/specs/tags-feed.md. Prisma-implicit many-to-many
+  // (managed `_ArticleToTag` join). No per-association metadata is
+  // needed today; if a slice ever wants "who tagged this / when", we
+  // migrate to an explicit join model.
+  tags          Tag[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   @@index([authorId])
-  @@index([published, publishedAt])
+  // Composite index that covers the feed's `ORDER BY publishedAt DESC, id DESC`
+  // with a `published = true` filter — the `id` tiebreaker keeps cursor
+  // pagination stable when two articles publish in the same millisecond.
+  // See docs/specs/tags-feed.md § Pagination.
+  @@index([published, publishedAt, id])
+}
+
+// Tags — see docs/specs/tags-feed.md.
+//
+// `slug` is the storage / lookup key (normalised, unique). `name` is
+// the trimmed original the author typed; first writer wins if two
+// authors capitalise differently ("Testing" vs. "testing").
+model Tag {
+  id       String    @id @default(cuid())
+  slug     String    @unique
+  name     String
+  articles Article[]
+
+  createdAt DateTime @default(now())
+
+  @@index([slug])
 }
 
 // Uploads (slice 4c). One row per successful POST /api/uploadthing —

@@ -27,6 +27,13 @@ type SeedArticle = {
   body: Prisma.InputJsonValue;
   published: boolean;
   publishedAt: Date | null;
+  /**
+   * Slice 5 — tag slugs to attach to the article. Colocated with the
+   * article rather than a separate mapping so a `git blame` on a slug
+   * points at the article that owns it. Kept `readonly` so the fixture
+   * data can't be mutated at runtime by the seed loop.
+   */
+  tags?: readonly string[];
 };
 
 /**
@@ -107,6 +114,7 @@ const ALICE_ARTICLES: readonly SeedArticle[] = [
     ),
     published: true,
     publishedAt: T.aliceOne,
+    tags: ["writing", "intro"],
   },
   {
     slug: "alice-writing-your-first-article",
@@ -118,6 +126,7 @@ const ALICE_ARTICLES: readonly SeedArticle[] = [
     ),
     published: true,
     publishedAt: T.aliceTwo,
+    tags: ["writing", "editor"],
   },
   {
     slug: "alice-notes-on-the-editor",
@@ -129,6 +138,7 @@ const ALICE_ARTICLES: readonly SeedArticle[] = [
     ),
     published: true,
     publishedAt: T.aliceThree,
+    tags: ["editor"],
   },
   {
     slug: "alice-draft-thoughts-on-follows",
@@ -154,6 +164,7 @@ const BOB_ARTICLES: readonly SeedArticle[] = [
     ),
     published: true,
     publishedAt: T.bobOne,
+    tags: ["intro"],
   },
   {
     slug: "bob-things-i-am-reading",
@@ -165,6 +176,7 @@ const BOB_ARTICLES: readonly SeedArticle[] = [
     ),
     published: true,
     publishedAt: T.bobTwo,
+    tags: ["reading"],
   },
 ];
 
@@ -192,7 +204,28 @@ const USERS: readonly SeedUser[] = [
 export type BaselineSummary = {
   users: { created: number; skipped: number };
   articles: { created: number; skipped: number };
+  tags: { created: number; skipped: number };
 };
+
+/**
+ * Slice 5 — every unique tag slug referenced by a seeded article.
+ * Derived from `USERS` at module load so `git diff` on a single tag
+ * change touches exactly the article + this comment. Keys are slugs;
+ * display names are the same as the slug (baseline tags are already
+ * lowercase-friendly words), matching what the app's tag normaliser
+ * would produce if an author typed them into the editor.
+ */
+const BASELINE_TAGS: readonly { slug: string; name: string }[] = (() => {
+  const seen = new Map<string, string>();
+  for (const user of USERS) {
+    for (const article of user.articles) {
+      for (const slug of article.tags ?? []) {
+        if (!seen.has(slug)) seen.set(slug, slug);
+      }
+    }
+  }
+  return [...seen.entries()].map(([slug, name]) => ({ slug, name }));
+})();
 
 /**
  * Populate the DB with the baseline set. Safe to call repeatedly on the
@@ -203,7 +236,27 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
   const summary: BaselineSummary = {
     users: { created: 0, skipped: 0 },
     articles: { created: 0, skipped: 0 },
+    tags: { created: 0, skipped: 0 },
   };
+
+  // Slice 5 — ensure every baseline tag exists BEFORE the article loop
+  // so each article's `connect: [{ slug }]` finds a real row. Same
+  // findUnique + create idempotency contract as users/articles; the
+  // schema has no `updatedAt` on `Tag`, so a naïve `upsert({ update: {} })`
+  // would be safe today, but the explicit branch keeps the counters
+  // truthful and matches the rest of this file.
+  for (const tag of BASELINE_TAGS) {
+    const existing = await db.tag.findUnique({
+      where: { slug: tag.slug },
+      select: { id: true },
+    });
+    if (existing) {
+      summary.tags.skipped += 1;
+    } else {
+      await db.tag.create({ data: { slug: tag.slug, name: tag.name } });
+      summary.tags.created += 1;
+    }
+  }
 
   for (const user of USERS) {
     // Look up (or create) the user by email — the single stable
@@ -256,6 +309,16 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
           published: article.published,
           publishedAt: article.publishedAt,
           authorId: author.id,
+          // Tags are always safe to `connect` here — the pre-loop
+          // above guarantees every referenced slug exists. Article is
+          // new (we're in the `!existing` branch), so no `set` needed.
+          ...(article.tags && article.tags.length > 0
+            ? {
+                tags: {
+                  connect: article.tags.map((slug) => ({ slug })),
+                },
+              }
+            : {}),
         },
       });
       summary.articles.created += 1;
