@@ -70,6 +70,14 @@ jobs:
           pnpm prisma generate
           pnpm prisma migrate deploy || pnpm prisma db push
 
+      # Dev-seed drift check. Runs the baseline scenario against the
+      # freshly-migrated CI database — a schema/validator change that
+      # breaks the seed fails the PR that caused it, instead of biting
+      # the next developer to run `pnpm db:reset`. See
+      # docs/specs/dev-seed.md § CI wiring.
+      - name: Seed (drift check)
+        run: pnpm db:seed
+
       - name: Typecheck
         run: pnpm typecheck
 
