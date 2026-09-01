@@ -20,13 +20,6 @@ import { bodySchema } from "@/lib/validation/article";
 // Types
 // -----------------------------------------------------------------------
 
-type SeedUser = {
-  email: string;
-  username: string;
-  name: string;
-  password: string;
-};
-
 type SeedArticle = {
   slug: string;
   title: string;
@@ -34,6 +27,24 @@ type SeedArticle = {
   body: Prisma.InputJsonValue;
   published: boolean;
   publishedAt: Date | null;
+};
+
+/**
+ * Articles are colocated with their author (rather than keyed by
+ * `username` in a side table) so both passes look up authors by the
+ * same stable identity — `email`. `username` is user-mutable via
+ * `PATCH /api/me` (see `lib/validation/profile.ts::updateMeSchema`),
+ * so a developer who logs in as Alice and renames her would otherwise
+ * break the next `pnpm db:seed` with a misleading "author @alice
+ * missing" error. Email is not mutable through any current API and
+ * makes for a stable seed identity.
+ */
+type SeedUser = {
+  email: string;
+  username: string;
+  name: string;
+  password: string;
+  articles: readonly SeedArticle[];
 };
 
 // -----------------------------------------------------------------------
@@ -46,20 +57,8 @@ type SeedArticle = {
  * it obvious these are not real accounts and prevents accidental email
  * delivery through Mailpit or a real SMTP relay.
  */
-const USERS: readonly SeedUser[] = [
-  {
-    email: "alice@medium-alt.test",
-    username: "alice",
-    name: "Alice Ng",
-    password: "Password123!",
-  },
-  {
-    email: "bob@medium-alt.test",
-    username: "bob",
-    name: "Bob Reyes",
-    password: "Password123!",
-  },
-];
+// USERS is defined below the article arrays so each user can reference
+// its own articles by name — see the bottom of this section.
 
 /** Build a tiny, valid Tiptap ProseMirror doc: one h2 + one paragraph. */
 function makeBody(heading: string, paragraph: string): Prisma.InputJsonValue {
@@ -97,78 +96,94 @@ const T = {
   bobTwo: new Date("2026-08-20T12:00:00Z"),
 } as const;
 
-const ARTICLES_BY_USERNAME: Record<string, readonly SeedArticle[]> = {
-  alice: [
-    {
-      slug: "alice-welcome-to-medium-alt",
-      title: "Welcome to Medium-Alt",
-      subtitle: "A tour of the reading and writing experience.",
-      body: makeBody(
-        "What this app is",
-        "Medium-Alt is a small clone built as a substrate for practicing an E2E automation framework and an agentic PR review pipeline.",
-      ),
-      published: true,
-      publishedAt: T.aliceOne,
-    },
-    {
-      slug: "alice-writing-your-first-article",
-      title: "Writing your first article",
-      subtitle: "From blank canvas to publish button.",
-      body: makeBody(
-        "Getting started",
-        "Head to the editor, give it a title, drop in a few paragraphs, then hit publish. Your article will show up on your profile and on its own reading page.",
-      ),
-      published: true,
-      publishedAt: T.aliceTwo,
-    },
-    {
-      slug: "alice-notes-on-the-editor",
-      title: "Notes on the editor",
-      subtitle: "Headings, lists, links, images — what works today.",
-      body: makeBody(
-        "Formatting basics",
-        "The editor supports headings, ordered and unordered lists, blockquotes, inline code, links, and inline images. The renderer stays in lockstep with a strict allowlist on the server.",
-      ),
-      published: true,
-      publishedAt: T.aliceThree,
-    },
-    {
-      slug: "alice-draft-thoughts-on-follows",
-      title: "Draft: thoughts on follows",
-      subtitle: "Rough sketch, not ready to publish.",
-      body: makeBody(
-        "Kicking around",
-        "This is a draft article. It should be visible to Alice but not to anonymous readers or other users.",
-      ),
-      published: false,
-      publishedAt: null,
-    },
-  ],
-  bob: [
-    {
-      slug: "bob-hello-from-bob",
-      title: "Hello from Bob",
-      subtitle: "A short introduction.",
-      body: makeBody(
-        "Hi",
-        "I'm Bob. This is my first post on Medium-Alt. Nice to meet you.",
-      ),
-      published: true,
-      publishedAt: T.bobOne,
-    },
-    {
-      slug: "bob-things-i-am-reading",
-      title: "Things I am reading",
-      subtitle: "A short list, updated occasionally.",
-      body: makeBody(
-        "Currently on the pile",
-        "A grab-bag of essays, papers, and blog posts I've bookmarked over the last month.",
-      ),
-      published: true,
-      publishedAt: T.bobTwo,
-    },
-  ],
-};
+const ALICE_ARTICLES: readonly SeedArticle[] = [
+  {
+    slug: "alice-welcome-to-medium-alt",
+    title: "Welcome to Medium-Alt",
+    subtitle: "A tour of the reading and writing experience.",
+    body: makeBody(
+      "What this app is",
+      "Medium-Alt is a small clone built as a substrate for practicing an E2E automation framework and an agentic PR review pipeline.",
+    ),
+    published: true,
+    publishedAt: T.aliceOne,
+  },
+  {
+    slug: "alice-writing-your-first-article",
+    title: "Writing your first article",
+    subtitle: "From blank canvas to publish button.",
+    body: makeBody(
+      "Getting started",
+      "Head to the editor, give it a title, drop in a few paragraphs, then hit publish. Your article will show up on your profile and on its own reading page.",
+    ),
+    published: true,
+    publishedAt: T.aliceTwo,
+  },
+  {
+    slug: "alice-notes-on-the-editor",
+    title: "Notes on the editor",
+    subtitle: "Headings, lists, links, images — what works today.",
+    body: makeBody(
+      "Formatting basics",
+      "The editor supports headings, ordered and unordered lists, blockquotes, inline code, links, and inline images. The renderer stays in lockstep with a strict allowlist on the server.",
+    ),
+    published: true,
+    publishedAt: T.aliceThree,
+  },
+  {
+    slug: "alice-draft-thoughts-on-follows",
+    title: "Draft: thoughts on follows",
+    subtitle: "Rough sketch, not ready to publish.",
+    body: makeBody(
+      "Kicking around",
+      "This is a draft article. It should be visible to Alice but not to anonymous readers or other users.",
+    ),
+    published: false,
+    publishedAt: null,
+  },
+];
+
+const BOB_ARTICLES: readonly SeedArticle[] = [
+  {
+    slug: "bob-hello-from-bob",
+    title: "Hello from Bob",
+    subtitle: "A short introduction.",
+    body: makeBody(
+      "Hi",
+      "I'm Bob. This is my first post on Medium-Alt. Nice to meet you.",
+    ),
+    published: true,
+    publishedAt: T.bobOne,
+  },
+  {
+    slug: "bob-things-i-am-reading",
+    title: "Things I am reading",
+    subtitle: "A short list, updated occasionally.",
+    body: makeBody(
+      "Currently on the pile",
+      "A grab-bag of essays, papers, and blog posts I've bookmarked over the last month.",
+    ),
+    published: true,
+    publishedAt: T.bobTwo,
+  },
+];
+
+const USERS: readonly SeedUser[] = [
+  {
+    email: "alice@medium-alt.test",
+    username: "alice",
+    name: "Alice Ng",
+    password: "Password123!",
+    articles: ALICE_ARTICLES,
+  },
+  {
+    email: "bob@medium-alt.test",
+    username: "bob",
+    name: "Bob Reyes",
+    password: "Password123!",
+    articles: BOB_ARTICLES,
+  },
+];
 
 // -----------------------------------------------------------------------
 // Seed driver
@@ -191,33 +206,34 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
   };
 
   for (const user of USERS) {
-    const existing = await db.user.findUnique({ where: { email: user.email } });
-    if (existing) {
-      summary.users.skipped += 1;
-      continue;
-    }
-    // Only hash when we're about to write. `hashPassword` is ~100 ms
-    // (argon2id) and there is no point paying it for users that already
-    // exist and won't be updated.
-    const passwordHash = await hashPassword(user.password);
-    await db.user.create({
-      data: {
-        email: user.email,
-        username: user.username,
-        name: user.name,
-        passwordHash,
-      },
+    // Look up (or create) the user by email — the single stable
+    // identity. `username` is user-mutable via PATCH /api/me, so
+    // keying anything downstream on it would let a developer break
+    // seed idempotency by renaming a seeded user through the app.
+    let author = await db.user.findUnique({
+      where: { email: user.email },
+      select: { id: true },
     });
-    summary.users.created += 1;
-  }
-
-  // Second pass — needs the user rows to exist so we can wire authorId.
-  for (const [username, articles] of Object.entries(ARTICLES_BY_USERNAME)) {
-    const author = await db.user.findUnique({ where: { username } });
-    if (!author) {
-      throw new Error(`seedBaseline: author @${username} missing — user pass did not run?`);
+    if (author) {
+      summary.users.skipped += 1;
+    } else {
+      // Only hash when we're about to write. `hashPassword` is ~100 ms
+      // (argon2id) and there is no point paying it for users that
+      // already exist and won't be updated.
+      const passwordHash = await hashPassword(user.password);
+      author = await db.user.create({
+        data: {
+          email: user.email,
+          username: user.username,
+          name: user.name,
+          passwordHash,
+        },
+        select: { id: true },
+      });
+      summary.users.created += 1;
     }
-    for (const article of articles) {
+
+    for (const article of user.articles) {
       // findUnique + create rather than `upsert({ update: {} })` — the
       // upsert path still bumps `updatedAt` (Prisma issues the UPDATE
       // even with an empty `update` clause), which breaks the "second
