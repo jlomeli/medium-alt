@@ -119,8 +119,16 @@ Each becomes one Playwright test. Grouped by journey.
       articles carrying that tag. Unknown tag returns 200 with
       `{ items: [], nextCursor: null }` (not 404).
 - [ ] `GET /api/articles?cursor=<opaque>` — resumes from the cursor.
-      An invalid/stale cursor returns 400 `{ error: { field: "cursor", code: "invalid" } }`,
-      not 500.
+      A **structurally invalid** cursor (not base64url JSON, missing
+      `p`/`i`, `p` unparseable as a Date) returns 400
+      `{ error: { field: "cursor", code: "invalid" } }`, not 500.
+- [ ] A **stale** cursor (structurally valid, but the anchor article
+      has since been deleted) is not a 400 — the tuple compare
+      `(publishedAt, id) < (cursor.p, cursor.i)` returns the correct
+      set of older articles whether the anchor row still exists or
+      not, so an existence check would only add a per-request DB
+      round trip without changing the response. Same trade as offset
+      pagination against a mutating dataset.
 - [ ] `GET /api/articles?limit=<n>` — accepts `1..50`; out-of-range
       returns 400.
 - [ ] `GET /api/tags` — 200 with `{ tags: [{ slug, name, count }] }`,

@@ -113,12 +113,16 @@ export const feedQuerySchema = z
     limit: z
       .string()
       .transform((raw, ctx) => {
-        const n = Number.parseInt(raw, 10);
-        if (Number.isNaN(n)) {
+        // `parseInt("5abc")` silently returns `5`; `parseInt("5.5")` returns
+        // `5`; `parseInt("1e3")` returns `1`. All are legitimate-looking
+        // "limits" from parseInt's perspective and a bad way to interpret
+        // a URL query param. Strict-integer regex first — reject anything
+        // that isn't a bare non-negative integer — then convert.
+        if (!/^\d+$/.test(raw)) {
           ctx.addIssue({ code: "custom", message: "limit must be an integer" });
           return z.NEVER;
         }
-        return n;
+        return Number.parseInt(raw, 10);
       })
       .pipe(
         z
@@ -138,12 +142,16 @@ export const tagsQuerySchema = z
     limit: z
       .string()
       .transform((raw, ctx) => {
-        const n = Number.parseInt(raw, 10);
-        if (Number.isNaN(n)) {
+        // `parseInt("5abc")` silently returns `5`; `parseInt("5.5")` returns
+        // `5`; `parseInt("1e3")` returns `1`. All are legitimate-looking
+        // "limits" from parseInt's perspective and a bad way to interpret
+        // a URL query param. Strict-integer regex first — reject anything
+        // that isn't a bare non-negative integer — then convert.
+        if (!/^\d+$/.test(raw)) {
           ctx.addIssue({ code: "custom", message: "limit must be an integer" });
           return z.NEVER;
         }
-        return n;
+        return Number.parseInt(raw, 10);
       })
       .pipe(
         z

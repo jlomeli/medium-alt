@@ -51,8 +51,11 @@ test.describe("@smoke tag filter + popular tags sidebar", () => {
     loggedInPage,
     articleFactory,
   }) => {
+    // Three articles: high enough count that the tag lands in the
+    // default-20 popular-tags list even against DB drift from other
+    // test runs sharing this database.
     const tag = uniqueTag();
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       await articleFactory.create(loggedInPage.request, {
         published: true,
         tags: [tag],

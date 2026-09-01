@@ -111,14 +111,11 @@ export async function POST(req: Request) {
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  // Only pass query params the schema knows about — `.strict()` on
-  // `feedQuerySchema` catches typos like `?limits=5` at the boundary
-  // rather than silently ignoring them.
+  // Hand the FULL query object to the schema so `.strict()` actually
+  // fires on unknown keys — earlier iterations pre-filtered to the
+  // known keys, which silently swallowed typos like `?limits=5`.
   const raw: Record<string, string> = {};
-  for (const key of ["tag", "cursor", "limit"] as const) {
-    const v = url.searchParams.get(key);
-    if (v !== null) raw[key] = v;
-  }
+  for (const [k, v] of url.searchParams.entries()) raw[k] = v;
   const parsed = feedQuerySchema.safeParse(raw);
   if (!parsed.success) {
     const first = parsed.error.issues[0]!;

@@ -15,9 +15,10 @@ import { listPopularTags } from "@/lib/articles/service";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  // Full query object → schema; `.strict()` on `tagsQuerySchema` rejects
+  // unknown keys instead of silently accepting `?limits=5` and friends.
   const raw: Record<string, string> = {};
-  const v = url.searchParams.get("limit");
-  if (v !== null) raw.limit = v;
+  for (const [k, v] of url.searchParams.entries()) raw[k] = v;
 
   const parsed = tagsQuerySchema.safeParse(raw);
   if (!parsed.success) {

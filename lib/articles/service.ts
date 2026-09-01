@@ -146,25 +146,29 @@ export async function listPublishedFeed(opts: {
         : {}),
     },
     orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
-    take: limit,
+    // Fetch one extra row as a "is there anything after this page?"
+    // probe. Without the +1, a page whose size is exactly `limit`
+    // (matching-article count is a multiple of the page size) would
+    // still emit a cursor and send the client to an empty follow-up
+    // page — the exact boundary the previous `rows.length < limit`
+    // check missed. Slicing the probe off before shaping keeps the
+    // response contract intact.
+    take: limit + 1,
     // Cursor fields are selected alongside the summary so we can build
     // `nextCursor` without a second query. `id` is not part of the
     // public shape — `shapeSummary` drops it via structural picking.
     select: { ...publicArticleSummarySelect, id: true },
   });
 
-  const items = rows.map(shapeSummary);
-  // A short page means we've exhausted the feed — no cursor to hand
-  // back. This is preferable to always issuing a cursor and letting
-  // the client discover the empty follow-up page, which would spend
-  // a round-trip to learn nothing.
-  const nextCursor =
-    rows.length < limit
-      ? null
-      : encodeCursor({
-          p: rows[rows.length - 1]!.publishedAt!.toISOString(),
-          i: rows[rows.length - 1]!.id,
-        });
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const items = pageRows.map(shapeSummary);
+  const nextCursor = hasMore
+    ? encodeCursor({
+        p: pageRows[pageRows.length - 1]!.publishedAt!.toISOString(),
+        i: pageRows[pageRows.length - 1]!.id,
+      })
+    : null;
   return { items, nextCursor };
 }
 

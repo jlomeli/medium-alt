@@ -164,6 +164,66 @@ test.describe("@smoke @api feed articles", () => {
     });
   });
 
+  test("malformed limits (`5abc`, `5.5`, `1e3`) → 400, not silent truncation", async ({
+    api,
+  }) => {
+    for (const raw of ["5abc", "5.5", "1e3"]) {
+      const res = await api.get(`/api/articles?limit=${raw}`);
+      expect(
+        res.status(),
+        `expected 400 for ?limit=${raw}, got ${res.status()}`,
+      ).toBe(400);
+      expect((await res.json()) as { error: { field: string } }).toMatchObject({
+        error: { field: "limit" },
+      });
+    }
+  });
+
+  test("unknown query key (?limits=5) → 400 via strict schema", async ({ api }) => {
+    // Guards against a regression of the reviewed bug where the
+    // route pre-filtered params to known keys before validation,
+    // making `.strict()` a no-op and silently swallowing typos.
+    const res = await api.get("/api/articles?limits=5");
+    expect(res.status()).toBe(400);
+  });
+
+  test("exact-multiple boundary: 4 items @ limit=2 → page 2 has null nextCursor", async ({
+    api,
+    loggedInPage,
+    articleFactory,
+  }) => {
+    // Regression test for "terminal page retains next cursor": when
+    // the item count is an exact multiple of `limit`, the naïve
+    // `rows.length < limit` check emits a cursor for the last page
+    // and sends the client to an empty follow-up. The fix fetches
+    // `limit + 1` rows as a look-ahead probe.
+    const tag = uniqueTag();
+    for (let i = 0; i < 4; i++) {
+      await articleFactory.create(loggedInPage.request, {
+        published: true,
+        tags: [tag],
+      });
+    }
+    const p1 = await api.get(`/api/articles?tag=${tag}&limit=2`);
+    const b1 = (await p1.json()) as {
+      items: unknown[];
+      nextCursor: string | null;
+    };
+    expect(b1.items).toHaveLength(2);
+    expect(b1.nextCursor).not.toBeNull();
+
+    const p2 = await api.get(
+      `/api/articles?tag=${tag}&limit=2&cursor=${encodeURIComponent(b1.nextCursor!)}`,
+    );
+    const b2 = (await p2.json()) as {
+      items: unknown[];
+      nextCursor: string | null;
+    };
+    expect(b2.items).toHaveLength(2);
+    // No phantom "there might be more" cursor on the exact boundary.
+    expect(b2.nextCursor).toBeNull();
+  });
+
   test("card shape includes tags, author, publishedAt; never body/authorId", async ({
     api,
     loggedInPage,
