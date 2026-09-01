@@ -69,7 +69,14 @@ class E2EStubStorage implements StorageAdapter {
     // Preserve the extension so `/__test-uploads/[key]` can guess a
     // Content-Type back on the way out.
     const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : "";
-    const key = `${randomUUID()}${ext}`;
+    // Magic-filename hook: an uploaded file whose name includes
+    // STUB_FORCE_DELETE_FAIL_KEY gets that literal key back, so the
+    // DELETE-cascade failure test can register the key through the
+    // regular /api/uploadthing → Upload-table path (ownership check
+    // fires) and then reference it from an article.
+    const key = file.name.includes(STUB_FORCE_DELETE_FAIL_KEY)
+      ? STUB_FORCE_DELETE_FAIL_KEY
+      : `${randomUUID()}${ext}`;
     const bytes = Buffer.from(await file.arrayBuffer());
     await writeFile(join(STUB_UPLOAD_DIR, key), bytes);
     return {

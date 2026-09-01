@@ -220,15 +220,33 @@ export async function DELETE(
   // Best-effort file cascade. Failures are logged with the article id
   // + intended keys so a follow-up prune can catch orphans, but the
   // request still returns 204 — the DB row is the source of truth.
-  const keys = collectImageKeys({
+  //
+  // Ownership filter (§ Delete-cascade — ownership): keys derived from
+  // the article's URLs are intersected with the `Upload` table scoped
+  // to the deleter. Copy-pasted URLs from another author's article
+  // therefore never reach `storage.deleteFiles`, so an unrelated user
+  // can't nuke someone else's file by removing their own article.
+  const derived = collectImageKeys({
     coverImageUrl: removed.coverImageUrl,
     body: removed.body as TiptapDoc,
   });
-  if (keys.length > 0) {
-    try {
-      await getStorage().deleteFiles(keys);
-    } catch (err) {
-      console.warn("[articles.DELETE] storage.deleteFiles failed", { slug, keys, err });
+  if (derived.length > 0) {
+    const owned = await db.upload.findMany({
+      where: { key: { in: derived }, ownerId: session.user.id },
+      select: { key: true },
+    });
+    const keys = owned.map((u) => u.key);
+    if (keys.length > 0) {
+      try {
+        await getStorage().deleteFiles(keys);
+      } catch (err) {
+        console.warn("[articles.DELETE] storage.deleteFiles failed", { slug, keys, err });
+      }
+      // Drop the Upload rows for the keys we intended to delete —
+      // even if storage.deleteFiles rejects, the row is no longer
+      // owned by any article we know about; a follow-up prune uses
+      // the presence of Upload rows to identify orphans.
+      await db.upload.deleteMany({ where: { key: { in: keys } } });
     }
   }
 

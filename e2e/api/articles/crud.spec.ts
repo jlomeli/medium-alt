@@ -2,10 +2,7 @@ import { test, expect } from "@e2e/support/fixtures";
 import { plainTextToTiptap } from "@e2e/support/factories/article.factory";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import {
-  STUB_UPLOAD_BASE_URL,
-  STUB_FORCE_DELETE_FAIL_KEY,
-} from "@/lib/uploads/storage";
+import { STUB_FORCE_DELETE_FAIL_KEY } from "@/lib/uploads/storage";
 
 /** HTTP contract for the 4 CRUD endpoints — docs/specs/articles-crud.md. */
 
@@ -372,14 +369,30 @@ test.describe("@smoke @api articles crud", () => {
   test("DELETE cascade — storage failure still returns 204", async ({
     loggedInPage,
     articleFactory,
+    imageFactory,
   }) => {
-    // Point the cover at the stub's magic force-fail key so the
-    // stub's `deleteFiles` throws inside the cascade. The DELETE
+    // Upload a file named after the stub's magic force-fail key so
+    // (a) an Upload row exists — ownership filter lets the key pass
+    // through to the cascade, and (b) the stub returns that literal
+    // key, so its `deleteFiles` throws when invoked. The DELETE
     // handler catches + logs; the request must still succeed.
-    // No real file needs to exist — the storage adapter's unlink
-    // path is idempotent for missing keys, but this test never
-    // reaches that path because the throw fires first.
-    const url = `${STUB_UPLOAD_BASE_URL}${STUB_FORCE_DELETE_FAIL_KEY}`;
+    const png = imageFactory.tinyPng();
+    const uploadRes = await loggedInPage.request.post("/api/uploadthing", {
+      multipart: {
+        file: {
+          name: `${STUB_FORCE_DELETE_FAIL_KEY}.png`,
+          mimeType: png.mime,
+          buffer: png.buffer,
+        },
+      },
+    });
+    expect(uploadRes.status()).toBe(200);
+    const { files } = (await uploadRes.json()) as {
+      files: Array<{ url: string; key: string }>;
+    };
+    expect(files[0]!.key).toBe(STUB_FORCE_DELETE_FAIL_KEY);
+    const url = files[0]!.url;
+
     const attrs = articleFactory.build();
     const created = await loggedInPage.request.post("/api/articles", {
       data: {
@@ -399,6 +412,63 @@ test.describe("@smoke @api articles crud", () => {
     // cascade rejected. The DB is the source of truth.
     const gone = await loggedInPage.request.get(`/api/articles/${article.slug}`);
     expect(gone.status()).toBe(404);
+  });
+
+  test("DELETE cascade — never deletes another author's uploaded files", async ({
+    loggedInPage,
+    articleFactory,
+    imageFactory,
+    userFactory,
+    page,
+  }) => {
+    // Author A uploads a file + attaches it to their article.
+    const png = imageFactory.tinyPng();
+    const aUpload = await loggedInPage.request.post("/api/uploadthing", {
+      multipart: {
+        file: { name: png.filename, mimeType: png.mime, buffer: png.buffer },
+      },
+    });
+    const aFiles = (await aUpload.json()) as {
+      files: Array<{ url: string; key: string }>;
+    };
+    const { url: aUrl, key: aKey } = aFiles.files[0]!;
+    await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...articleFactory.build({ published: true }),
+        body: plainTextToTiptap("A's body"),
+        coverImageUrl: aUrl,
+        coverImageAlt: "A's cover",
+      },
+    });
+    expect(existsSync(join(STUB_UPLOAD_DIR, aKey))).toBe(true);
+
+    // Author B logs in on a separate context, copies A's public URL
+    // into a B-owned article (write path only enforces the URL
+    // allowlist, not ownership), then deletes their article.
+    const stranger = await userFactory.create();
+    await page.request.post("/api/login", {
+      data: { email: stranger.email, password: stranger.password },
+    });
+    const bAttrs = articleFactory.build({ published: false });
+    const bCreated = await page.request.post("/api/articles", {
+      data: {
+        ...bAttrs,
+        body: plainTextToTiptap(bAttrs.body),
+        coverImageUrl: aUrl,
+        coverImageAlt: "borrowed from A",
+      },
+    });
+    expect(bCreated.status()).toBe(201);
+    const { article: bArticle } = (await bCreated.json()) as {
+      article: { slug: string };
+    };
+
+    const bDel = await page.request.delete(`/api/articles/${bArticle.slug}`);
+    expect(bDel.status()).toBe(204);
+
+    // A's file is untouched — the cascade filter dropped the key
+    // because B doesn't own it.
+    expect(existsSync(join(STUB_UPLOAD_DIR, aKey))).toBe(true);
   });
 
   test("DELETE /api/articles/{slug} — author 204, unknown / non-author 404, unauth 401", async ({

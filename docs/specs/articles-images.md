@@ -118,6 +118,13 @@ Each becomes one Playwright test. Grouped by journey.
   keys that were meant to be dropped. The DB row is the source of
   truth; a stray file in the bucket is a follow-up prune concern, not
   a request failure.
+- [ ] Delete-cascade is scoped by upload ownership: an author who
+  copies another user's public UploadThing URL into their own article
+  and then deletes it does NOT nuke the original file. Only keys the
+  deleter uploaded (recorded in the `Upload` table on POST
+  `/api/uploadthing`) reach `storage.deleteFiles`. Verified by an API
+  test: user A uploads + attaches to A1; user B copies the URL into
+  B1; B deletes B1; A's file is still on disk.
 
 ### API contract
 
@@ -248,11 +255,23 @@ helper `lib/articles/image-keys.ts`:
   nodes, extracts each `src`, adds `coverImageUrl` if present, and
   parses out the trailing `<key>` path segment for each UploadThing
   URL. Returns `string[]` (deduped).
-- Consumed by the DELETE route: after the SQL delete commits, call
-  `utapi.deleteFiles(keys)` in a try/catch; log failures with
-  `{ articleId, keys }` and swallow. Never fails the request.
+- Consumed by the DELETE route: after the SQL delete commits, filter
+  the derived keys through `db.upload.findMany({ where: { key: { in:
+  derived }, ownerId: session.user.id } })`. The intersection is what
+  reaches `utapi.deleteFiles(keys)` — copy-pasted URLs from another
+  author never make it. Call the storage in a try/catch; log
+  failures with `{ articleId, keys }` and swallow. Never fails the
+  request.
+- The matching `Upload` rows are then deleted so a follow-up prune
+  can use "row present, storage absent" as its orphan-detection
+  signal.
 - Under `E2E=1`, the SDK is swapped for the stub's `deleteFiles`,
   which removes the corresponding files from `test-results/uploads/`.
+
+Upload ownership is recorded by `POST /api/uploadthing`: on a
+successful `storage.uploadFile`, a row is `upsert`ed into `Upload`
+with `{ key, url, ownerId: session.user.id }`. The unique constraint
+on `key` plus the `upsert` keeps a retried request idempotent.
 
 ## UI surface
 

@@ -322,10 +322,13 @@ registerRoute({
   description:
     "Author-only. Non-authors get 404 (never 403). Response body is empty; " +
     "the contract is carried by the 204 status. Slice 4c: after the SQL " +
-    "delete commits, every UploadThing file the article owned (cover + " +
-    "inline `image` node srcs) is best-effort deleted from storage. A " +
-    "failure in the storage call is logged but does NOT fail the request " +
-    "— the DB row is the source of truth.",
+    "delete commits, UploadThing files derived from the article's cover + " +
+    "inline `image` node srcs are best-effort deleted from storage. The " +
+    "cascade is scoped by ownership — only keys uploaded by the deleter " +
+    "(tracked in the `Upload` table) are dropped, so copy-pasted URLs " +
+    "from another author's article are never affected. A failure in the " +
+    "storage call is logged but does NOT fail the request — the DB row " +
+    "is the source of truth.",
   tags: ["articles"],
   responses: {
     "204": {

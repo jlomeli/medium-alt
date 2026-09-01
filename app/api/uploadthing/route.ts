@@ -23,6 +23,7 @@
  */
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/config";
+import { db } from "@/lib/db";
 import { getStorage } from "@/lib/uploads/storage";
 import {
   ALLOWED_UPLOAD_MIMES,
@@ -86,6 +87,23 @@ export async function POST(req: Request): Promise<Response> {
   const storage = getStorage();
   try {
     const result = await storage.uploadFile(file);
+    // Record ownership. The DELETE-cascade filters keys through this
+    // table so a copy-pasted URL from another user's article can't be
+    // deleted through the shared UTApi client. See
+    // docs/specs/articles-images.md § Delete-cascade (ownership).
+    //
+    // `upsert` (not `create`) is defensive: a retried request with the
+    // same key must not 500 on the unique constraint. The storage
+    // adapter guarantees fresh keys, so this branch is rare.
+    await db.upload.upsert({
+      where: { key: result.key },
+      create: {
+        key: result.key,
+        url: result.url,
+        ownerId: session.user.id,
+      },
+      update: {},
+    });
     const body: UploadRouteResponse = { files: [result] };
     return NextResponse.json(body, { status: 200 });
   } catch (err) {
