@@ -28,12 +28,7 @@ test.describe("@regression articles upload errors", () => {
     });
 
     const big = imageFactory.oversizedBuffer();
-    const fileInput = loggedInPage.locator('input[type="file"]').first();
-    await fileInput.setInputFiles({
-      name: big.filename,
-      mimeType: big.mime,
-      buffer: big.buffer,
-    });
+    await form.pickCoverFile(big);
 
     await expect(
       loggedInPage.getByRole("alert").filter({ hasText: /too large|max/i }),
@@ -51,12 +46,7 @@ test.describe("@regression articles upload errors", () => {
     await form.fill(articleFactory.build({ published: false }));
 
     const txt = imageFactory.textBuffer();
-    const fileInput = loggedInPage.locator('input[type="file"]').first();
-    await fileInput.setInputFiles({
-      name: txt.filename,
-      mimeType: txt.mime,
-      buffer: txt.buffer,
-    });
+    await form.pickCoverFile(txt);
 
     await expect(
       loggedInPage

@@ -228,27 +228,31 @@ export class ArticleFormPage extends BasePage {
   }
 
   /**
-   * Upload a cover image. Playwright's `setInputFiles` targets the
-   * hidden `<input type="file">` directly (identified by its `accept`
-   * attribute matching the upload MIME allowlist), sidestepping the
-   * visible-button click that would open the OS file picker in a
-   * real browser. Waits for the POST /api/uploadthing round-trip
-   * before returning so downstream state assertions don't race the
-   * upload.
+   * Upload a cover image via the visible "Upload / Change cover image"
+   * button. The button proxies a click to a hidden `<input type="file">`
+   * — Playwright's `waitForEvent("filechooser")` intercepts the
+   * resulting native prompt, so we set files on the chooser rather than
+   * reaching into the DOM for the input (which the locator policy
+   * forbids: positional CSS breaks the moment DOM order shifts).
+   *
+   * Waits for the POST /api/uploadthing round-trip before returning so
+   * downstream state assertions don't race the upload. For tests that
+   * expect the client-side pre-flight (MIME / size) to short-circuit
+   * BEFORE any network call fires, use `pickCoverFile()` instead.
    */
   async uploadCover(input: {
     buffer: Buffer;
     filename: string;
     mime: string;
   }): Promise<void> {
-    const fileInput = this.page.locator('input[type="file"]').first();
+    const chooser = await this.openCoverFilePicker();
     await Promise.all([
       this.page.waitForResponse(
         (res) =>
           res.url().endsWith("/api/uploadthing") &&
           res.request().method() === "POST",
       ),
-      fileInput.setInputFiles({
+      chooser.setFiles({
         name: input.filename,
         mimeType: input.mime,
         buffer: input.buffer,
@@ -257,37 +261,92 @@ export class ArticleFormPage extends BasePage {
   }
 
   /**
-   * End-to-end helper for the inline image flow: click "Add image",
-   * set the file on the hidden picker inside the editor, wait for
-   * the upload to complete, fill the alt-text dialog, confirm.
-   *
-   * Assumes the alt-text dialog opens on upload success (the editor
-   * behavior spec'd in docs/specs/articles-images.md § UI surface).
+   * Same button-driven file-chooser flow as `uploadCover`, but does
+   * NOT wait for a network response. Use in the upload-errors specs
+   * where the client-side pre-flight is expected to reject the file
+   * before firing POST /api/uploadthing.
    */
-  async uploadInlineImage(
-    input: { buffer: Buffer; filename: string; mime: string },
-    opts: { alt: string },
-  ): Promise<void> {
-    await this.addImageButton.click();
-    // The editor has its own hidden file input in addition to the
-    // cover-image one, so scope by `nth`: the cover input is first
-    // in DOM order, the editor's input is second.
-    const editorFileInput = this.page.locator('input[type="file"]').nth(1);
+  async pickCoverFile(input: {
+    buffer: Buffer;
+    filename: string;
+    mime: string;
+  }): Promise<void> {
+    const chooser = await this.openCoverFilePicker();
+    await chooser.setFiles({
+      name: input.filename,
+      mimeType: input.mime,
+      buffer: input.buffer,
+    });
+  }
+
+  /**
+   * Click "Add image", hand a file to the resulting file chooser, wait
+   * for the upload response, and leave the alt-text dialog open. The
+   * caller finishes the flow (fill + confirm, or cancel). Extracted so
+   * the "confirm disabled while alt empty" and "cancel → no image
+   * node" tests don't have to duplicate the click + chooser + wait
+   * choreography.
+   */
+  async openInlineImageAltDialog(input: {
+    buffer: Buffer;
+    filename: string;
+    mime: string;
+  }): Promise<void> {
+    const chooser = await this.openInlineImageFilePicker();
     await Promise.all([
       this.page.waitForResponse(
         (res) =>
           res.url().endsWith("/api/uploadthing") &&
           res.request().method() === "POST",
       ),
-      editorFileInput.setInputFiles({
+      chooser.setFiles({
         name: input.filename,
         mimeType: input.mime,
         buffer: input.buffer,
       }),
     ]);
     await this.altTextDialog.waitFor({ state: "visible" });
+  }
+
+  /**
+   * End-to-end helper for the inline image flow: open the alt-text
+   * dialog via `openInlineImageAltDialog`, fill alt, confirm.
+   */
+  async uploadInlineImage(
+    input: { buffer: Buffer; filename: string; mime: string },
+    opts: { alt: string },
+  ): Promise<void> {
+    await this.openInlineImageAltDialog(input);
     await this.altTextField.fill(opts.alt);
     await this.altTextConfirm.click();
+  }
+
+  /**
+   * Click the visible cover-image trigger (empty-state "Upload cover
+   * image" OR "Change cover image" once a cover is set) and return the
+   * intercepted file chooser. The two possible button labels are
+   * OR'd via `.or()` so the caller doesn't have to branch on the
+   * current cover state.
+   */
+  private async openCoverFilePicker() {
+    const trigger = this.coverImageButton.or(this.changeCoverButton);
+    const [chooser] = await Promise.all([
+      this.page.waitForEvent("filechooser"),
+      trigger.click(),
+    ]);
+    return chooser;
+  }
+
+  /**
+   * Click "Add image" in the editor toolbar and return the intercepted
+   * file chooser.
+   */
+  private async openInlineImageFilePicker() {
+    const [chooser] = await Promise.all([
+      this.page.waitForEvent("filechooser"),
+      this.addImageButton.click(),
+    ]);
+    return chooser;
   }
 
   async submit(): Promise<void> {

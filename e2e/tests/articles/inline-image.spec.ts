@@ -43,20 +43,11 @@ test.describe("@regression articles inline image", () => {
     await form.gotoNew();
     await form.fill(articleFactory.build({ published: false }));
 
-    await form.addImageButton.click();
-    const editorFileInput = loggedInPage.locator('input[type="file"]').nth(1);
-    await Promise.all([
-      loggedInPage.waitForResponse(
-        (res) =>
-          res.url().endsWith("/api/uploadthing") &&
-          res.request().method() === "POST",
-      ),
-      editorFileInput.setInputFiles({
-        name: "tiny.png",
-        mimeType: "image/png",
-        buffer: imageFactory.tinyPng().buffer,
-      }),
-    ]);
+    await form.openInlineImageAltDialog({
+      buffer: imageFactory.tinyPng().buffer,
+      filename: "tiny.png",
+      mime: "image/png",
+    });
 
     await expect(form.altTextDialog).toBeVisible();
     await expect(form.altTextConfirm).toBeDisabled();
@@ -74,20 +65,11 @@ test.describe("@regression articles inline image", () => {
     await form.gotoNew();
     await form.fill(articleFactory.build({ published: false }));
 
-    await form.addImageButton.click();
-    const editorFileInput = loggedInPage.locator('input[type="file"]').nth(1);
-    await Promise.all([
-      loggedInPage.waitForResponse(
-        (res) =>
-          res.url().endsWith("/api/uploadthing") &&
-          res.request().method() === "POST",
-      ),
-      editorFileInput.setInputFiles({
-        name: "tiny.png",
-        mimeType: "image/png",
-        buffer: imageFactory.tinyPng().buffer,
-      }),
-    ]);
+    await form.openInlineImageAltDialog({
+      buffer: imageFactory.tinyPng().buffer,
+      filename: "tiny.png",
+      mime: "image/png",
+    });
 
     await expect(form.altTextDialog).toBeVisible();
     await form.altTextCancel.click();
