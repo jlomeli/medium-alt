@@ -132,6 +132,16 @@ Each becomes one Playwright test. Grouped by journey.
   Verified by an API test: author uploads once, sets the URL as cover
   on articles X and Y, deletes X; the file (and its `Upload` row)
   survive because Y still references it.
+- [ ] Delete-cascade does **not** protect cross-author hotlinks:
+  the "sibling reference" check is intentionally per-author. If B
+  pastes A's public URL into their own article and A then deletes,
+  A's file is removed and B's reference breaks — same as any hotlink
+  on the web. Making this cross-author would let any user permanently
+  pin any other user's uploads by referencing them (a resource-lock
+  attack, and a block on legitimate deletes: accidental upload,
+  moderation, takedown request). The referring author's remedy is to
+  upload their own copy so they own a stable reference; the platform's
+  remedy is a future auto-copy-on-paste UX, not a cascade change.
 
 ### API contract
 

@@ -246,8 +246,20 @@ export async function DELETE(
       // Walk the deleter's remaining articles (the just-deleted row is
       // already gone from the tx above, so it can't shadow itself here)
       // and drop any key that's still referenced somewhere else. We
-      // scope by author because ownership is per-user: only the owner's
-      // own articles matter for a "still in use by me" decision.
+      // scope by author on purpose:
+      //
+      // - The owner has authority over their own upload. If a stranger
+      //   pasted the public URL into their article, that's a hotlink —
+      //   it breaks when the source deletes, same as anywhere on the
+      //   web. A cross-author check would mean any user could pin any
+      //   other user's uploads by referencing them, blocking legitimate
+      //   deletes (accidental upload, moderation, takedown) and
+      //   unbounding storage cost.
+      // - The referring author's remedy is to upload their own copy so
+      //   they own a stable reference — not to prevent the source
+      //   author from managing their storage.
+      // - This scoping is documented in docs/specs/articles-images.md
+      //   § Delete-cascade — cross-author hotlinks.
       const others = await db.article.findMany({
         where: { authorId: session.user.id },
         select: { coverImageUrl: true, body: true },
