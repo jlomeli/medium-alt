@@ -275,16 +275,39 @@ export async function DELETE(
       }
       const keys = [...ownedKeys].filter((k) => !stillReferenced.has(k));
       if (keys.length > 0) {
+        // Known limitation — race between the reference walk above and
+        // the storage delete below. A POST/PATCH that saves a new
+        // article referencing one of these keys after the walk (but
+        // before deleteFiles) is missed, and its backing file is
+        // deleted. The window is milliseconds but real.
+        //
+        // A correct fix requires two coordinated changes not in scope
+        // for this cascade edit:
+        //   1. Cascade + article writes serialize on a per-owner
+        //      `pg_advisory_xact_lock(hashtext(ownerId))`.
+        //   2. Article POST/PATCH validate at write time that every
+        //      derived key still has an Upload row (Read Committed
+        //      alone doesn't block concurrent INSERTs on Article, so
+        //      an advisory lock without write-time key validation
+        //      only shrinks the window — a POST landing after the
+        //      lock releases still succeeds against a dead key).
+        // Tracking as a follow-up; see docs/specs/articles-images.md
+        // § Delete-cascade — known race.
+        let storageOk = true;
         try {
           await getStorage().deleteFiles(keys);
         } catch (err) {
+          storageOk = false;
           console.warn("[articles.DELETE] storage.deleteFiles failed", { slug, keys, err });
         }
-        // Drop the Upload rows for the keys we intended to delete —
-        // even if storage.deleteFiles rejects, the row is no longer
-        // owned by any article we know about; a follow-up prune uses
-        // the presence of Upload rows to identify orphans.
-        await db.upload.deleteMany({ where: { key: { in: keys } } });
+        // Only drop Upload rows once storage confirms deletion.
+        // Keeping the row on failure preserves the ownership pointer
+        // a reconciliation / retry job needs to find the still-present
+        // file and try again. Losing it strands the file with no
+        // durable link back to its owner.
+        if (storageOk) {
+          await db.upload.deleteMany({ where: { key: { in: keys } } });
+        }
       }
     }
   }

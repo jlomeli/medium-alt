@@ -412,6 +412,13 @@ test.describe("@smoke @api articles crud", () => {
     // cascade rejected. The DB is the source of truth.
     const gone = await loggedInPage.request.get(`/api/articles/${article.slug}`);
     expect(gone.status()).toBe(404);
+
+    // The stub's magic force-fail hook throws BEFORE unlinking, so the
+    // file remains on disk — this confirms the cascade actually tried
+    // to delete (rather than skipping) and asserts that a rejected
+    // storage delete leaves both the file AND (per the code) its
+    // Upload row in place, so a reconciliation job can find + retry.
+    expect(existsSync(join(STUB_UPLOAD_DIR, STUB_FORCE_DELETE_FAIL_KEY))).toBe(true);
   });
 
   test("DELETE cascade — never deletes another author's uploaded files", async ({

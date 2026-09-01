@@ -331,7 +331,9 @@ registerRoute({
     "URL or inline body image) are also kept, so deleting one article " +
     "never breaks a sibling that shares a file. A failure in the " +
     "storage call is logged but does NOT fail the request — the DB row " +
-    "is the source of truth.",
+    "is the source of truth. On a rejected storage delete the matching " +
+    "`Upload` rows are kept, so the still-present file retains its " +
+    "durable ownership pointer for a reconciliation / retry job.",
   tags: ["articles"],
   responses: {
     "204": {

@@ -118,6 +118,12 @@ Each becomes one Playwright test. Grouped by journey.
   keys that were meant to be dropped. The DB row is the source of
   truth; a stray file in the bucket is a follow-up prune concern, not
   a request failure.
+- [ ] On a rejected storage delete, the matching `Upload` rows are
+  **kept**, not dropped. The row is the only durable ownership
+  pointer for the still-present file — losing it would strand the
+  file with no way for a reconciliation / retry job to find its
+  owner. Verified by the failure-cascade API test asserting the file
+  survives on disk after a 204.
 - [ ] Delete-cascade is scoped by upload ownership: an author who
   copies another user's public UploadThing URL into their own article
   and then deletes it does NOT nuke the original file. Only keys the
@@ -132,6 +138,26 @@ Each becomes one Playwright test. Grouped by journey.
   Verified by an API test: author uploads once, sets the URL as cover
   on articles X and Y, deletes X; the file (and its `Upload` row)
   survive because Y still references it.
+### Known limitations
+
+- **Race between reference walk and storage delete.** The cascade
+  walks the deleter's remaining articles for references, then calls
+  `storage.deleteFiles`. A concurrent POST/PATCH that saves a new
+  article referencing one of the doomed keys between those two steps
+  is missed, and the file is deleted from under it. The window is
+  milliseconds but real. A correct fix requires two coordinated
+  changes not in scope for this slice:
+    1. Cascade + article writes serialize on a per-owner
+       `pg_advisory_xact_lock(hashtext(ownerId))`.
+    2. Article POST/PATCH validate at write time that every derived
+       key still has an `Upload` row (Read Committed alone doesn't
+       block concurrent Article INSERTs, so an advisory lock without
+       write-time key validation only shrinks the window — a POST
+       landing after the lock releases still succeeds against a dead
+       key).
+  Tracked for a follow-up slice; the current code notes the race
+  where the walk happens.
+
 - [ ] Delete-cascade does **not** protect cross-author hotlinks:
   the "sibling reference" check is intentionally per-author. If B
   pastes A's public URL into their own article and A then deletes,
