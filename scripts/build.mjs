@@ -1,12 +1,23 @@
 #!/usr/bin/env node
 /**
- * Wraps `prisma migrate deploy && next build`.
+ * Wraps `prisma generate && prisma migrate deploy && next build`.
  *
- * Sole job: normalize `DIRECT_URL`. Prisma requires it (see prisma/schema.prisma),
- * but the Neon-Vercel integration exports the unpooled connection under
- * `DATABASE_URL_UNPOOLED` / `POSTGRES_URL_NON_POOLING` — different integration
- * versions name it differently and neither uses `DIRECT_URL`. On CI and local
- * we set `DIRECT_URL` directly and this fallback chain is a no-op.
+ * Two jobs:
+ *
+ * 1. **`prisma generate` first, always.** Vercel restores `node_modules`
+ *    from its build cache when the lockfile is unchanged, which makes
+ *    `pnpm install` short-circuit with "Already up to date" and skip
+ *    the `postinstall` hook that would normally regenerate the client.
+ *    A schema change (new model / new field) then reaches `next build`
+ *    with a stale client and the type-check fails with "Property 'x'
+ *    does not exist on type 'PrismaClient'". Running `prisma generate`
+ *    here is idempotent and cheap (~1s) and closes the cache-hit hole.
+ *
+ * 2. **Normalize `DIRECT_URL`.** Prisma requires it (see prisma/schema.prisma),
+ *    but the Neon-Vercel integration exports the unpooled connection under
+ *    `DATABASE_URL_UNPOOLED` / `POSTGRES_URL_NON_POOLING` — different integration
+ *    versions name it differently and neither uses `DIRECT_URL`. On CI and local
+ *    we set `DIRECT_URL` directly and this fallback chain is a no-op.
  *
  * Falls back to `DATABASE_URL` last-resort so a single-URL setup still works
  * even if migrations against a pgbouncer-pooled URL are slower.
@@ -29,6 +40,7 @@ if (!process.env.DIRECT_URL) {
 }
 
 const steps = [
+  ["pnpm", ["prisma", "generate"]],
   ["pnpm", ["prisma", "migrate", "deploy"]],
   ["pnpm", ["next", "build"]],
 ];
