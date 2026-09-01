@@ -471,6 +471,61 @@ test.describe("@smoke @api articles crud", () => {
     expect(existsSync(join(STUB_UPLOAD_DIR, aKey))).toBe(true);
   });
 
+  test("DELETE cascade — keeps files still referenced by another of the deleter's articles", async ({
+    loggedInPage,
+    articleFactory,
+    imageFactory,
+  }) => {
+    // Author uploads one image, sets it as cover on two articles they
+    // own. Deleting one must NOT remove the shared file — the other
+    // article's cover would break. The ownership filter alone can't
+    // catch this (both articles are the deleter's), so the cascade
+    // also walks remaining articles for a shared reference.
+    const png = imageFactory.tinyPng();
+    const uploaded = await loggedInPage.request.post("/api/uploadthing", {
+      multipart: {
+        file: { name: png.filename, mimeType: png.mime, buffer: png.buffer },
+      },
+    });
+    const { files } = (await uploaded.json()) as {
+      files: Array<{ url: string; key: string }>;
+    };
+    const { url, key } = files[0]!;
+
+    const firstAttrs = articleFactory.build({ published: true });
+    const firstRes = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...firstAttrs,
+        body: plainTextToTiptap(firstAttrs.body),
+        coverImageUrl: url,
+        coverImageAlt: "shared cover",
+      },
+    });
+    expect(firstRes.status()).toBe(201);
+    const { article: firstArticle } = (await firstRes.json()) as {
+      article: { slug: string };
+    };
+
+    const secondAttrs = articleFactory.build({ published: true });
+    const secondRes = await loggedInPage.request.post("/api/articles", {
+      data: {
+        ...secondAttrs,
+        body: plainTextToTiptap(secondAttrs.body),
+        coverImageUrl: url,
+        coverImageAlt: "shared cover",
+      },
+    });
+    expect(secondRes.status()).toBe(201);
+
+    // Delete the first article. The file survives because the second
+    // article still references its URL.
+    const del = await loggedInPage.request.delete(
+      `/api/articles/${firstArticle.slug}`,
+    );
+    expect(del.status()).toBe(204);
+    expect(existsSync(join(STUB_UPLOAD_DIR, key))).toBe(true);
+  });
+
   test("DELETE /api/articles/{slug} — author 204, unknown / non-author 404, unauth 401", async ({
     api,
     loggedInPage,

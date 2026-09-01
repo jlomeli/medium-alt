@@ -226,6 +226,12 @@ export async function DELETE(
   // to the deleter. Copy-pasted URLs from another author's article
   // therefore never reach `storage.deleteFiles`, so an unrelated user
   // can't nuke someone else's file by removing their own article.
+  //
+  // Shared-reference filter (§ Delete-cascade — shared references):
+  // an owned key that another of the deleter's remaining articles
+  // still references (cover URL or inline body image) is kept. Without
+  // this, deleting one of two articles that share an image would nuke
+  // the file and break the surviving article's cover / inline image.
   const derived = collectImageKeys({
     coverImageUrl: removed.coverImageUrl,
     body: removed.body as TiptapDoc,
@@ -235,18 +241,39 @@ export async function DELETE(
       where: { key: { in: derived }, ownerId: session.user.id },
       select: { key: true },
     });
-    const keys = owned.map((u) => u.key);
-    if (keys.length > 0) {
-      try {
-        await getStorage().deleteFiles(keys);
-      } catch (err) {
-        console.warn("[articles.DELETE] storage.deleteFiles failed", { slug, keys, err });
+    const ownedKeys = new Set(owned.map((u) => u.key));
+    if (ownedKeys.size > 0) {
+      // Walk the deleter's remaining articles (the just-deleted row is
+      // already gone from the tx above, so it can't shadow itself here)
+      // and drop any key that's still referenced somewhere else. We
+      // scope by author because ownership is per-user: only the owner's
+      // own articles matter for a "still in use by me" decision.
+      const others = await db.article.findMany({
+        where: { authorId: session.user.id },
+        select: { coverImageUrl: true, body: true },
+      });
+      const stillReferenced = new Set<string>();
+      for (const other of others) {
+        for (const key of collectImageKeys({
+          coverImageUrl: other.coverImageUrl,
+          body: other.body as TiptapDoc,
+        })) {
+          if (ownedKeys.has(key)) stillReferenced.add(key);
+        }
       }
-      // Drop the Upload rows for the keys we intended to delete —
-      // even if storage.deleteFiles rejects, the row is no longer
-      // owned by any article we know about; a follow-up prune uses
-      // the presence of Upload rows to identify orphans.
-      await db.upload.deleteMany({ where: { key: { in: keys } } });
+      const keys = [...ownedKeys].filter((k) => !stillReferenced.has(k));
+      if (keys.length > 0) {
+        try {
+          await getStorage().deleteFiles(keys);
+        } catch (err) {
+          console.warn("[articles.DELETE] storage.deleteFiles failed", { slug, keys, err });
+        }
+        // Drop the Upload rows for the keys we intended to delete —
+        // even if storage.deleteFiles rejects, the row is no longer
+        // owned by any article we know about; a follow-up prune uses
+        // the presence of Upload rows to identify orphans.
+        await db.upload.deleteMany({ where: { key: { in: keys } } });
+      }
     }
   }
 

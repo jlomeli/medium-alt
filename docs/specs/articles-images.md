@@ -125,6 +125,13 @@ Each becomes one Playwright test. Grouped by journey.
   `/api/uploadthing`) reach `storage.deleteFiles`. Verified by an API
   test: user A uploads + attaches to A1; user B copies the URL into
   B1; B deletes B1; A's file is still on disk.
+- [ ] Delete-cascade also skips keys still referenced by any of the
+  deleter's OTHER articles (same cover URL, or the same URL as an
+  inline body image). Without this, deleting one of two articles that
+  share the same cover would remove the file and break the survivor.
+  Verified by an API test: author uploads once, sets the URL as cover
+  on articles X and Y, deletes X; the file (and its `Upload` row)
+  survive because Y still references it.
 
 ### API contract
 
