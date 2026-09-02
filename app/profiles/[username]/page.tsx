@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
 import { FollowButton } from "@/components/profile/FollowButton";
+import { ClapCount } from "@/components/claps/ClapCount";
 import { listPublishedArticlesByUsername } from "@/lib/articles/service";
 import { isFollowing } from "@/lib/follows/service";
 
@@ -100,6 +101,17 @@ export default async function PublicProfilePage({
                 {article.subtitle && (
                   <p className="text-sm text-neutral-600">{article.subtitle}</p>
                 )}
+                {/*
+                  Slice 7 — clap aggregate rendered on every summary
+                  surface (spec § Clap counts on feed cards). The count
+                  ships even at zero for consistency with the feed
+                  cards; the `<ClapCount>` glyph is identical across
+                  surfaces so `getByLabel("Clap count")` in tests works
+                  uniformly.
+                */}
+                <p className="mt-1">
+                  <ClapCount count={article.clapCount} />
+                </p>
               </li>
             ))}
           </ul>

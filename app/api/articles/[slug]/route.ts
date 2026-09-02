@@ -13,6 +13,10 @@ import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { updateArticleSchema } from "@/lib/validation/article";
 import { articleViewSelect, shapeArticleView } from "@/lib/articles/view";
+import {
+  getViewerClapState,
+  sumClapsForArticle,
+} from "@/lib/claps/service";
 import { collectImageKeys } from "@/lib/articles/image-keys";
 import { getStorage } from "@/lib/uploads/storage";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
@@ -23,24 +27,41 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
+  // `id` is also needed to key the clap-count aggregate; `authorId`
+  // for the visibility check below. Neither is returned in the body.
   const article = await db.article.findUnique({
     where: { slug },
-    // authorId only for the visibility check below; not returned in the body.
-    select: { ...articleViewSelect, authorId: true },
+    select: { ...articleViewSelect, id: true, authorId: true },
   });
   if (!article) {
     return NextResponse.json({ error: "not-found" }, { status: 404 });
   }
 
+  const session = await auth();
   if (!article.published) {
-    const session = await auth();
     if (!session?.user || session.user.id !== article.authorId) {
       return NextResponse.json({ error: "not-found" }, { status: 404 });
     }
   }
 
-  const { authorId: _authorId, ...view } = article;
-  return NextResponse.json({ article: shapeArticleView(view) });
+  // Slice 7 — enrich with the aggregate + optional viewer block. The
+  // two aggregates run in parallel with each other (both DB reads);
+  // when the caller is anonymous the viewer read is skipped entirely
+  // and the `viewer` key stays absent from the response.
+  const [clapCount, viewerState] = await Promise.all([
+    sumClapsForArticle(article.id),
+    session?.user
+      ? getViewerClapState(session.user.id, article.id)
+      : Promise.resolve(undefined),
+  ]);
+
+  const { id: _id, authorId: _authorId, ...view } = article;
+  return NextResponse.json({
+    article: shapeArticleView(view, {
+      clapCount,
+      viewer: viewerState,
+    }),
+  });
 }
 
 export async function PATCH(
@@ -178,7 +199,19 @@ export async function PATCH(
         select: articleViewSelect,
       });
     });
-    return NextResponse.json({ article: shapeArticleView(updated) });
+    // Slice 7 — the PATCH caller is always the article's author (the
+    // ownership check above short-circuits everyone else with 404).
+    // Authors can't self-clap, so `viewer` is always
+    // `{ clapCount: 0, hasClapped: false }`. The aggregate can be
+    // non-zero (other readers may have clapped a previously-published
+    // article that's now being edited), so we still read it.
+    const clapCount = await sumClapsForArticle(existing.id);
+    return NextResponse.json({
+      article: shapeArticleView(updated, {
+        clapCount,
+        viewer: { clapCount: 0, hasClapped: false },
+      }),
+    });
   } catch (err) {
     // Concurrent DELETE landed between the ownership lookup and the
     // update — surface as 404 (the row is gone), not a 500.

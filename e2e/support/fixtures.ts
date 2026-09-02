@@ -2,6 +2,7 @@ import { test as base, expect, type Page, type APIRequestContext } from "@playwr
 import { UserFactory, type CreatedUser } from "./factories/user.factory";
 import { ArticleFactory } from "./factories/article.factory";
 import { FollowFactory } from "./factories/follow.factory";
+import { ClapFactory } from "./factories/clap.factory";
 import { ImageFactory } from "./factories/image.factory";
 import { MailpitClient } from "./clients/mailpit.client";
 
@@ -24,6 +25,7 @@ type Fixtures = {
   userFactory: UserFactory;
   articleFactory: ArticleFactory;
   followFactory: FollowFactory;
+  clapFactory: ClapFactory;
   imageFactory: ImageFactory;
   testUser: CreatedUser;
   loggedInPage: Page;
@@ -52,6 +54,13 @@ export const test = base.extend<Fixtures>({
     // authed `APIRequestContext` per call so a single test can have
     // one user follow several others without re-instantiating.
     await use(new FollowFactory());
+  },
+
+  clapFactory: async ({}, use) => {
+    // Context-free — same rationale as `followFactory`. A single test
+    // can have multiple readers clap on the same article without
+    // re-instantiating.
+    await use(new ClapFactory());
   },
 
   imageFactory: async ({}, use) => {

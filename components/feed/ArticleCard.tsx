@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { PublicArticleSummary } from "@/lib/articles/service";
+import { ClapCount } from "@/components/claps/ClapCount";
 import { TagChip } from "./TagChip";
 
 /**
@@ -26,11 +27,11 @@ export function ArticleCard({ article }: { article: PublicArticleSummary }) {
       {article.subtitle && (
         <p className="mt-1 text-neutral-600">{article.subtitle}</p>
       )}
-      <p className="mt-2 text-sm text-neutral-500">
-        by {authorLabel}
+      <p className="mt-2 flex flex-wrap items-center gap-x-2 text-sm text-neutral-500">
+        <span>by {authorLabel}</span>
         {article.publishedAt && (
           <>
-            {" · "}
+            <span aria-hidden="true">·</span>
             <time dateTime={article.publishedAt.toISOString()}>
               {article.publishedAt.toLocaleDateString(undefined, {
                 year: "numeric",
@@ -40,6 +41,15 @@ export function ArticleCard({ article }: { article: PublicArticleSummary }) {
             </time>
           </>
         )}
+        {/*
+          Slice 7 — aggregate clap count on every card. Rendered
+          even when zero (spec § Clap counts on feed cards:
+          "consistency beats subtly-different empty states"). The
+          number carries `aria-label="Clap count"` via `<ClapCount>`
+          so tests find it with `getByLabel` without a testid.
+        */}
+        <span aria-hidden="true">·</span>
+        <ClapCount count={article.clapCount} />
       </p>
       {article.tags.length > 0 && (
         <ul aria-label="Tags" className="mt-3 flex flex-wrap gap-2">

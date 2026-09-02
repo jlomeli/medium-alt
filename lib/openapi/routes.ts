@@ -23,6 +23,7 @@ import {
   createArticleSchema,
   updateArticleSchema,
 } from "@/lib/validation/article";
+import { addClapsSchema } from "@/lib/validation/claps";
 
 // Response shapes as Zod so the OpenAPI generator can turn them into JSON
 // Schemas without a second declaration.
@@ -234,6 +235,17 @@ const articleBodyDocSchema = z
   })
   .describe("Tiptap ProseMirror doc — see lib/validation/article.ts.");
 
+// Slice 7 — the per-viewer clap block. Appears on `articleViewSchema`
+// only when the caller is authenticated (see docs/specs/claps.md §
+// API contract — "the viewer block is omitted, not null, for
+// anonymous callers"). `.optional()` here encodes exactly that
+// present-vs-absent contract; OpenAPI's `required` list therefore
+// excludes `viewer`.
+const viewerClapSchema = z.object({
+  clapCount: z.number().int().min(0).max(50),
+  hasClapped: z.boolean(),
+});
+
 const articleViewSchema = z.object({
   slug: z.string(),
   title: z.string(),
@@ -252,6 +264,10 @@ const articleViewSchema = z.object({
   // Slice 5 — sorted tag slugs. Sorted server-side for deterministic
   // OpenAPI examples + test diffs.
   tags: z.array(z.string()),
+  // Slice 7 — aggregate + optional per-viewer clap state. See
+  // docs/specs/claps.md § API contract.
+  clapCount: z.number().int().nonnegative(),
+  viewer: viewerClapSchema.optional(),
 });
 
 const articleResponseSchema = z.object({ article: articleViewSchema });
@@ -267,6 +283,10 @@ const publicArticleSummarySchema = z.object({
   // ignore unknown keys are unaffected).
   tags: z.array(z.string()),
   author: authorViewSchema,
+  // Slice 7 — aggregate clap count on every card. No viewer block on
+  // this shape (read-page-only affordance); see docs/specs/claps.md §
+  // API contract.
+  clapCount: z.number().int().nonnegative(),
 });
 
 const feedResponseSchema = z.object({
@@ -545,6 +565,66 @@ registerRoute({
     "200": { description: "One page of Your Feed.", schema: feedResponseSchema },
     "400": { description: "Malformed cursor / out-of-range limit.", schema: fieldErrorSchema },
     "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+  },
+});
+
+// -------- Claps (docs/specs/claps.md § API surface) --------
+
+const clapResponseSchema = z.object({
+  viewerCount: z.number().int().min(0).max(50),
+  totalCount: z.number().int().nonnegative(),
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/articles/{slug}/claps",
+  summary: "Add claps to an article.",
+  description:
+    "Idempotent up to the 50-clap-per-viewer cap: 201 on the first row " +
+    "created for the viewer, 200 on any subsequent write (including the " +
+    "cap-hit no-op). `delta` is optional; a missing / empty body means " +
+    "`{ delta: 1 }` — the natural per-click cadence. When the cap " +
+    "intervenes the response reflects the *actual* counts, not the " +
+    "requested delta. Anti-enumeration: an unknown slug and a draft the " +
+    "caller doesn't own collapse to the same 404. Self-clap (the author " +
+    "clapping their own article) → field-scoped 400 `self-clap`, " +
+    "matching the `self-follow` shape.",
+  tags: ["claps"],
+  request: addClapsSchema,
+  responses: {
+    "200": { description: "Updated (idempotent repeat or cap-hit).", schema: clapResponseSchema },
+    "201": { description: "First clap by this viewer.", schema: clapResponseSchema },
+    "400": {
+      description:
+        "`delta` out of range, or the caller is the article's author.",
+      schema: fieldErrorSchema,
+    },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": {
+      description: "No such article, or a draft the caller doesn't own.",
+      schema: notFoundSchema,
+    },
+  },
+});
+
+registerRoute({
+  method: "delete",
+  path: "/api/articles/{slug}/claps",
+  summary: "Clear the caller's clap contribution to an article.",
+  description:
+    "Idempotent: 204 whether or not a row existed. Removes the caller's " +
+    "entire Clap row for the article — there's no `-1`-per-click semantic " +
+    "(matches Medium's UX, and dodges the 'which of my N claps am I " +
+    "removing' question). Unknown slug / non-visible draft is still a " +
+    "404 (client-error territory, not idempotency).",
+  tags: ["claps"],
+  responses: {
+    "204": { description: "Cleared (or was never clapped)." },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": {
+      description: "No such article, or a draft the caller doesn't own.",
+      schema: notFoundSchema,
+    },
   },
 });
 

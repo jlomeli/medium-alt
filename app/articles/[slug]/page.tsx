@@ -4,6 +4,12 @@ import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { renderTiptap, type TiptapDoc } from "@/lib/articles/tiptap";
 import { TagChip } from "@/components/feed/TagChip";
+import { ClapButton } from "@/components/claps/ClapButton";
+import { ClapCount } from "@/components/claps/ClapCount";
+import {
+  getViewerClapState,
+  sumClapsForArticle,
+} from "@/lib/claps/service";
 
 /**
  * `/articles/[slug]` — public read view. Drafts are visible only to
@@ -18,10 +24,12 @@ export default async function ArticleReadPage({
   const [article, session] = await Promise.all([
     db.article.findUnique({
       where: { slug },
-      // `authorId` is used ONLY for the ownership comparison below; it is
-      // not rendered and doesn't leak in any response — this is a server
-      // component, not an API surface.
+      // `authorId` is used ONLY for the ownership comparison below; `id`
+      // for the slice-7 clap aggregate. Neither is rendered and neither
+      // leaks in any response — this is a server component, not an API
+      // surface.
       select: {
+        id: true,
         slug: true,
         title: true,
         subtitle: true,
@@ -42,6 +50,19 @@ export default async function ArticleReadPage({
 
   const isAuthor = session?.user?.id === article.authorId;
   if (!article.published && !isAuthor) notFound();
+
+  // Slice 7 — clap aggregate + optional viewer state. Skip the viewer
+  // read entirely when anonymous or when the viewer is the author
+  // (self-clap is impossible; the author never has a Clap row for
+  // their own article). Parallelised so the read view waits once,
+  // not twice, on the DB.
+  const viewerId = !isAuthor ? session?.user?.id : undefined;
+  const [clapCount, viewerClapState] = await Promise.all([
+    sumClapsForArticle(article.id),
+    viewerId
+      ? getViewerClapState(viewerId, article.id)
+      : Promise.resolve(null),
+  ]);
 
   const authorLabel =
     article.author.name && article.author.username
@@ -129,6 +150,43 @@ export default async function ArticleReadPage({
           }}
         />
       </article>
+      {/*
+        Slice 7 — clap affordance. Three render variants, decided
+        here (RSC) so the DOM difference between "own article",
+        "anonymous", and "signed-in reader" is a compile-time
+        property of this file, not a runtime branch inside the
+        client component:
+          - Author viewing own article → static `<ClapCount>`
+            only. No button in the DOM at all (spec § UI surface).
+          - Anonymous viewer → `<ClapButton variant="anonymous">`
+            renders a link to /login. No JS needed.
+          - Signed-in non-author → `<ClapButton variant="signed-in">`
+            with optimistic UI.
+        The wrapping `<section aria-label="Claps">` scopes POM
+        reads so the button, count, and error alert can be located
+        without a testid.
+      */}
+      {article.published && (
+        <section aria-label="Claps" className="mt-8">
+          {isAuthor ? (
+            <ClapCount count={clapCount} label="Total claps" />
+          ) : session?.user ? (
+            <ClapButton
+              variant="signed-in"
+              slug={article.slug}
+              initialViewerCount={viewerClapState?.clapCount ?? 0}
+              initialTotalCount={clapCount}
+            />
+          ) : (
+            <ClapButton
+              variant="anonymous"
+              slug={article.slug}
+              initialTotalCount={clapCount}
+              articlePath={`/articles/${article.slug}`}
+            />
+          )}
+        </section>
+      )}
       {isAuthor && (
         <div className="mt-8">
           <Link
