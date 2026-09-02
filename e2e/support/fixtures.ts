@@ -1,6 +1,7 @@
 import { test as base, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { UserFactory, type CreatedUser } from "./factories/user.factory";
 import { ArticleFactory } from "./factories/article.factory";
+import { FollowFactory } from "./factories/follow.factory";
 import { ImageFactory } from "./factories/image.factory";
 import { MailpitClient } from "./clients/mailpit.client";
 
@@ -22,6 +23,7 @@ type Fixtures = {
   api: APIRequestContext;
   userFactory: UserFactory;
   articleFactory: ArticleFactory;
+  followFactory: FollowFactory;
   imageFactory: ImageFactory;
   testUser: CreatedUser;
   loggedInPage: Page;
@@ -43,6 +45,13 @@ export const test = base.extend<Fixtures>({
     // `loggedInPage.request`). Keeping the factory context-free makes it
     // trivial to create articles for multiple authors in the same test.
     await use(new ArticleFactory());
+  },
+
+  followFactory: async ({}, use) => {
+    // Context-free (like `articleFactory`) — the caller supplies the
+    // authed `APIRequestContext` per call so a single test can have
+    // one user follow several others without re-instantiating.
+    await use(new FollowFactory());
   },
 
   imageFactory: async ({}, use) => {

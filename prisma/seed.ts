@@ -32,7 +32,8 @@ async function main() {
   console.log(
     `[seed] baseline: users +${summary.users.created} (skipped ${summary.users.skipped}), ` +
       `articles +${summary.articles.created} (skipped ${summary.articles.skipped}), ` +
-      `tags +${summary.tags.created} (skipped ${summary.tags.skipped}).`,
+      `tags +${summary.tags.created} (skipped ${summary.tags.skipped}), ` +
+      `follows +${summary.follows.created} (skipped ${summary.follows.skipped}).`,
   );
 }
 

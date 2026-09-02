@@ -136,6 +136,55 @@ export const feedQuerySchema = z
   .strict();
 export type FeedQuery = z.infer<typeof feedQuerySchema>;
 
+/**
+ * `GET /api/feed` query — Your Feed. Same cursor + limit semantics as
+ * `feedQuerySchema` above, but the `tag` field is *not* accepted:
+ * Your Feed is scoped by author (via the follow relation), not by
+ * tag. Combining the two dimensions is a v2 UX question — see
+ * docs/specs/follow.md § Non-goals.
+ *
+ * Kept as a separate schema (rather than an `.omit()` of
+ * `feedQuerySchema`) so the two OpenAPI declarations render without
+ * inheritance and the "no `tag` param on /api/feed" decision is
+ * visible in a single `grep`.
+ */
+export const feedYourQuerySchema = z
+  .object({
+    cursor: z
+      .string()
+      .transform((raw, ctx) => {
+        try {
+          return decodeCursor(raw);
+        } catch (err) {
+          ctx.addIssue({
+            code: "custom",
+            message: err instanceof Error ? err.message : "invalid cursor",
+          });
+          return z.NEVER;
+        }
+      })
+      .optional(),
+    limit: z
+      .string()
+      .transform((raw, ctx) => {
+        if (!/^\d+$/.test(raw)) {
+          ctx.addIssue({ code: "custom", message: "limit must be an integer" });
+          return z.NEVER;
+        }
+        return Number.parseInt(raw, 10);
+      })
+      .pipe(
+        z
+          .number()
+          .int()
+          .min(1, { message: `limit must be at least 1` })
+          .max(MAX_FEED_LIMIT, { message: `limit must be at most ${MAX_FEED_LIMIT}` }),
+      )
+      .optional(),
+  })
+  .strict();
+export type FeedYourQuery = z.infer<typeof feedYourQuerySchema>;
+
 /** `GET /api/tags` query. Only `limit` for now. */
 export const tagsQuerySchema = z
   .object({

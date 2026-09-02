@@ -19,6 +19,7 @@ export function FeedList({
   nextCursor,
   tag,
   limit,
+  feed,
   emptyMessage,
 }: {
   items: PublicArticleSummary[];
@@ -31,16 +32,24 @@ export function FeedList({
    * URL so a future default change is honoured on the next click.
    */
   limit?: number;
+  /**
+   * Slice 6 — preserve `?feed=me` across pagination so a "Next" click
+   * on Your Feed doesn't silently drop the viewer back to Global.
+   * `undefined` = Global feed (no query param).
+   */
+  feed?: "me";
   emptyMessage: string;
 }) {
   if (items.length === 0) {
     return <p className="text-neutral-600">{emptyMessage}</p>;
   }
 
-  // Build the ?cursor= link URL, preserving `?tag=` and `?limit=` when set.
+  // Build the ?cursor= link URL, preserving `?tag=`, `?limit=`, and
+  // `?feed=me` when set.
   const nextHref = nextCursor
     ? "/?" +
       new URLSearchParams({
+        ...(feed ? { feed } : {}),
         ...(tag ? { tag } : {}),
         ...(limit ? { limit: String(limit) } : {}),
         cursor: nextCursor,

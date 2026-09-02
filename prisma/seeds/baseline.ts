@@ -205,7 +205,26 @@ export type BaselineSummary = {
   users: { created: number; skipped: number };
   articles: { created: number; skipped: number };
   tags: { created: number; skipped: number };
+  follows: { created: number; skipped: number };
 };
+
+/**
+ * Slice 6 — baseline follow edges. Bob follows Alice so a fresh
+ * `pnpm db:seed` gives:
+ *   - Logged in as Bob → `/?feed=me` shows Alice's published
+ *     articles (non-empty Your Feed on first look).
+ *   - Logged in as Alice → `/?feed=me` shows the empty state
+ *     (Alice follows nobody in the baseline).
+ * Both directions of the acceptance criteria are demoable without any
+ * test-only setup. Keyed by (follower, following) email so the source
+ * text is legible without cross-referencing the user block.
+ */
+const BASELINE_FOLLOWS: readonly {
+  followerEmail: string;
+  followingEmail: string;
+}[] = [
+  { followerEmail: "bob@medium-alt.test", followingEmail: "alice@medium-alt.test" },
+];
 
 /**
  * Slice 5 — every unique tag slug referenced by a seeded article.
@@ -237,6 +256,7 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
     users: { created: 0, skipped: 0 },
     articles: { created: 0, skipped: 0 },
     tags: { created: 0, skipped: 0 },
+    follows: { created: 0, skipped: 0 },
   };
 
   // Slice 5 — ensure every baseline tag exists BEFORE the article loop
@@ -322,6 +342,49 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
         },
       });
       summary.articles.created += 1;
+    }
+  }
+
+  // Slice 6 — baseline follows. Resolve both sides by email (the
+  // stable identity used everywhere else in this seed) so the file
+  // reads as a self-describing graph. findUnique + create matches
+  // the article-branch idempotency: composite `@@id([followerId,
+  // followingId])` gives us the natural existence check.
+  for (const edge of BASELINE_FOLLOWS) {
+    const [follower, following] = await Promise.all([
+      db.user.findUnique({
+        where: { email: edge.followerEmail },
+        select: { id: true },
+      }),
+      db.user.findUnique({
+        where: { email: edge.followingEmail },
+        select: { id: true },
+      }),
+    ]);
+    if (!follower || !following) {
+      // A missing endpoint means the USERS block above was edited
+      // without updating BASELINE_FOLLOWS — loud error beats a
+      // silently-skipped edge.
+      throw new Error(
+        `Baseline follow ${edge.followerEmail} → ${edge.followingEmail} references a user that isn't in USERS`,
+      );
+    }
+    const existing = await db.follow.findUnique({
+      where: {
+        followerId_followingId: {
+          followerId: follower.id,
+          followingId: following.id,
+        },
+      },
+      select: { followerId: true },
+    });
+    if (existing) {
+      summary.follows.skipped += 1;
+    } else {
+      await db.follow.create({
+        data: { followerId: follower.id, followingId: following.id },
+      });
+      summary.follows.created += 1;
     }
   }
 

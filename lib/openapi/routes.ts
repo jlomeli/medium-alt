@@ -484,6 +484,70 @@ registerRoute({
   },
 });
 
+// -------- Follow + Your Feed (docs/specs/follow.md) --------
+
+const followResponseSchema = z.object({
+  following: z.literal(true),
+  followedAt: z.string().datetime(),
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/users/{username}/follow",
+  summary: "Follow a user.",
+  description:
+    "Idempotent: 201 on the first successful call, 200 on any repeat " +
+    "after the follow already exists. Response body is byte-identical " +
+    "in both cases — clients that ignore the status code still see the " +
+    "same shape. Self-follow is rejected with a field-scoped 400 " +
+    "(`self-follow`). Unknown target → 404.",
+  tags: ["follow"],
+  responses: {
+    "200": { description: "Already following (idempotent repeat).", schema: followResponseSchema },
+    "201": { description: "Follow created.", schema: followResponseSchema },
+    "400": { description: "Attempting to follow yourself.", schema: fieldErrorSchema },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": { description: "Unknown username.", schema: notFoundSchema },
+  },
+});
+
+registerRoute({
+  method: "delete",
+  path: "/api/users/{username}/follow",
+  summary: "Unfollow a user.",
+  description:
+    "Idempotent: 204 whether or not a follow row existed. Deleting a " +
+    "non-existent relationship is not an error — symmetric to POST's " +
+    "'already followed → 200 with same body'. Unknown target is still " +
+    "a 404 (a bad URL is a client error, not idempotency territory).",
+  tags: ["follow"],
+  responses: {
+    "204": { description: "Unfollowed (or was never following)." },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": { description: "Unknown username.", schema: notFoundSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/feed",
+  summary: "Your Feed — published articles from authors you follow.",
+  description:
+    "Auth-required. Response shape is identical to `GET /api/articles` " +
+    "so a client that paginates the global feed can point at this " +
+    "route with no code changes. Cursor pagination on " +
+    "`(publishedAt DESC, id DESC)`; `nextCursor` is `null` when the " +
+    "returned page was the last. Viewer following nobody → 200 with " +
+    "an empty items array (not 404). The viewer's own articles are " +
+    "always excluded, even if a self-follow row somehow exists.",
+  tags: ["follow"],
+  responses: {
+    "200": { description: "One page of Your Feed.", schema: feedResponseSchema },
+    "400": { description: "Malformed cursor / out-of-range limit.", schema: fieldErrorSchema },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+  },
+});
+
 registerRoute({
   method: "post",
   path: "/api/password-reset/confirm",

@@ -15,6 +15,13 @@ export class PublicProfilePage extends BasePage {
   readonly bio;
   readonly editProfileLink;
   readonly notFoundHeading;
+  // Slice 6 — follow / unfollow affordance. `followButton` is the
+  // signed-in <button>; `followLink` is the anonymous <a> that
+  // bounces through /login. Both carry the accessible name "Follow"
+  // (the button flips to "Unfollow" once the row exists).
+  readonly followButton;
+  readonly unfollowButton;
+  readonly followLink;
 
   constructor(page: Page) {
     super(page);
@@ -28,6 +35,9 @@ export class PublicProfilePage extends BasePage {
     // and queryable by accessible name here.
     this.bio = this.page.getByRole("region", { name: "Bio" });
     this.editProfileLink = this.page.getByRole("link", { name: "Edit profile" });
+    this.followButton = this.page.getByRole("button", { name: "Follow" });
+    this.unfollowButton = this.page.getByRole("button", { name: "Unfollow" });
+    this.followLink = this.page.getByRole("link", { name: "Follow" });
     // Next.js `not-found.tsx` renders a heading we can key off. Convention:
     // "This page could not be found." — checked in the app's not-found file.
     this.notFoundHeading = this.page.getByRole("heading", { name: /not found/i });

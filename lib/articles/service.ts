@@ -122,8 +122,32 @@ export async function listPublishedFeed(opts: {
   limit: number;
   cursor?: FeedCursor;
   tag?: string;
+  /**
+   * Slice 6 — restrict the feed to articles by a specific set of
+   * author ids. `undefined` means "no author filter" (global feed);
+   * an empty array is a shortcut to "no articles" without hitting
+   * Prisma at all — used by `listFollowedFeed` when the viewer
+   * follows nobody. See docs/specs/follow.md § API surface.
+   */
+  authorIn?: readonly string[];
+  /**
+   * Slice 6 — belt-and-braces exclusion of a specific author (in
+   * practice, the viewer themselves on Your Feed). Applied on top of
+   * `authorIn` so a hypothetical self-follow row seeded directly
+   * against the DB doesn't leak the viewer's own drafts into their
+   * feed.
+   */
+  excludeAuthorId?: string;
 }): Promise<{ items: PublicArticleSummary[]; nextCursor: string | null }> {
-  const { limit, cursor, tag } = opts;
+  const { limit, cursor, tag, authorIn, excludeAuthorId } = opts;
+
+  // Fast path: an explicitly-empty `authorIn` means "no possible
+  // matches" (Your Feed with zero follows). Skip the DB round-trip
+  // rather than emit `WHERE authorId IN ()` which some drivers
+  // rewrite to `WHERE FALSE` — trivial cost but clearer intent.
+  if (authorIn !== undefined && authorIn.length === 0) {
+    return { items: [], nextCursor: null };
+  }
 
   // `where` is built up piecewise so the `tag` and `cursor` clauses
   // stay independently readable. Compound `(publishedAt, id) < ...` is
@@ -136,6 +160,8 @@ export async function listPublishedFeed(opts: {
     where: {
       published: true,
       ...(tag ? { tags: { some: { slug: tag } } } : {}),
+      ...(authorIn ? { authorId: { in: [...authorIn] } } : {}),
+      ...(excludeAuthorId ? { NOT: { authorId: excludeAuthorId } } : {}),
       ...(cursor && cursorDate
         ? {
             OR: [
@@ -212,4 +238,36 @@ export async function listPopularTags(limit: number): Promise<PopularTag[]> {
     .map((t) => ({ slug: t.slug, name: t.name, count: t.articles.length }))
     .sort((a, b) => (b.count - a.count) || a.slug.localeCompare(b.slug))
     .slice(0, limit);
+}
+
+/**
+ * Page of Your Feed — published articles from authors the viewer
+ * follows. Reuses the global-feed pagination path via
+ * `listPublishedFeed`'s `authorIn` + `excludeAuthorId` filters, so the
+ * cursor shape is identical to `/api/articles` and the two feeds
+ * share one code path from `WHERE` down. See docs/specs/follow.md §
+ * API surface.
+ *
+ * `excludeAuthorId: viewerId` is belt-and-braces: normal API traffic
+ * can't self-follow (`POST /follow` returns 400), but a directly-
+ * seeded self-row shouldn't leak the viewer's own articles into their
+ * feed either.
+ */
+export async function listFollowedFeed(opts: {
+  viewerId: string;
+  limit: number;
+  cursor?: FeedCursor;
+}): Promise<{ items: PublicArticleSummary[]; nextCursor: string | null }> {
+  const { viewerId, limit, cursor } = opts;
+  const follows = await db.follow.findMany({
+    where: { followerId: viewerId },
+    select: { followingId: true },
+  });
+  const followedIds = follows.map((f) => f.followingId);
+  return listPublishedFeed({
+    limit,
+    cursor,
+    authorIn: followedIds,
+    excludeAuthorId: viewerId,
+  });
 }
