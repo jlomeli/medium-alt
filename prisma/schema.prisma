@@ -35,6 +35,11 @@ model User {
   passwordResetTokens PasswordResetToken[]
   articles            Article[]
   uploads             Upload[]
+  // Follow — see docs/specs/follow.md.
+  // `following` = rows where this user is the follower (doing the following).
+  // `followers` = rows where this user is being followed.
+  following           Follow[]             @relation("FollowFollower")
+  followers           Follow[]             @relation("FollowFollowing")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -141,6 +146,29 @@ model Upload {
   createdAt DateTime @default(now())
 
   @@index([ownerId])
+}
+
+// Follows — see docs/specs/follow.md.
+//
+// Explicit join with a composite primary key so `POST /follow` is a
+// natural upsert (no findFirst round-trip) and `createdAt` lands for
+// free. `followerId` = the user doing the following; `followingId` =
+// the user being followed. Deletes cascade in both directions so a
+// deleted user's incoming and outgoing edges disappear cleanly.
+//
+// The two indexes match the two read patterns:
+//   - `followerId` → "who does X follow?" (Your Feed).
+//   - `followingId` → future follower-list page.
+model Follow {
+  followerId  String
+  follower    User     @relation("FollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("FollowFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@id([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
 }
 
 // Password-reset flow — see docs/specs/auth.md. `tokenHash` is sha256(raw);

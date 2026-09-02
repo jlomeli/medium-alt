@@ -15,7 +15,7 @@ export function PopularTags({
   activeSlug?: string;
 }) {
   return (
-    <aside aria-labelledby="popular-tags-heading" className="sticky top-6">
+    <aside id="popular-tags" aria-labelledby="popular-tags-heading" className="sticky top-6">
       <h2
         id="popular-tags-heading"
         className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500"
