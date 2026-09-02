@@ -178,11 +178,23 @@ Each becomes one Playwright test. Grouped by journey.
       the article's author → 400
       `{ error: { field: "slug", code: "self-clap" } }`. No row
       is created / updated. Matches the `self-follow` shape.
+      **Applies to authored drafts too**: an author POSTing to
+      their own unpublished article still gets `400 self-clap`,
+      not `404`. The 404 branch below is scoped to drafts *not
+      owned by the caller* — an author knows their own draft
+      exists, so no information leaks, and self-clap is the
+      more specific violation.
 - [ ] `POST /api/articles/{slug}/claps` — signed-in, article
       slug unknown OR article is a draft not owned by the
       caller → 404 `{ error: "not-found" }`. (Drafts do not
       leak: same "404, never 403" rule from articles-crud
-      slice 4a.)
+      slice 4a.) Precedence rule for the route: resolve the
+      article via `resolveArticleForCaller` first (which returns
+      404 for both unknown-slug and someone-else's-draft), then
+      check `article.authorId === session.user.id` for the
+      self-clap 400. That order is what makes "author on own
+      draft → 400" deterministic rather than dependent on which
+      check the route wrote first.
 - [ ] `POST /api/articles/{slug}/claps` — anonymous → 401
       `{ error: "unauthenticated" }`. No row is created.
 - [ ] `POST /api/articles/{slug}/claps` — body `{ delta: 0 }`
@@ -326,12 +338,33 @@ Migration: `pnpm db:migrate --name claps-add-clap-model`.
 The 50-cap is enforced **server-side** inside the shared
 `lib/claps/service.ts` helper, not at the schema layer (a check
 constraint would fire *after* the `UPDATE` and surface as an
-opaque DB error). The helper reads-modify-writes inside a
-transaction, capping the new value at 50 before writing. Zod
-validates the request `delta ∈ [1, 50]`; the cap intersection
-happens in the service. Rationale: the service already owns the
-count arithmetic (increment logic, rollback on race), so putting
-the cap there keeps a single source of truth.
+opaque DB error). Zod validates the request `delta ∈ [1, 50]`;
+the cap intersection happens in the service. Rationale: the
+service already owns the count arithmetic (increment logic,
+rollback on race), so putting the cap there keeps a single source
+of truth.
+
+**Race-safe write path.** The read-modify-write for an existing
+row runs inside `db.$transaction`, and the initial `SELECT` uses
+`FOR UPDATE` to lock the `(userId, articleId)` row for the
+transaction's duration. That is what makes the cap arithmetic
+atomic — two overlapping `POST /claps` from the same viewer
+serialise on the lock rather than each reading a stale `count`
+and racing to overwrite the other's increment. The applied
+delta is `Math.min(currentCount + requestedDelta, 50) - currentCount`,
+so a request that would exceed the cap is clamped and reports
+the actually-applied delta in the response (never over 50).
+
+**Race-safe first-clap path.** For a viewer who has no row yet,
+the service probes on the composite key, then attempts a
+`db.clap.create` outside the transaction. If two concurrent
+first-clap requests race, one wins and the other catches
+Prisma's `P2002` (unique-constraint violation on the composite
+PK) and falls through to the increment path — which then runs
+under the row lock described above. Net effect: no duplicate
+row, no lost update, and the second request returns `200` (a
+subsequent bump) rather than `201`. Same P2002-catch pattern
+`lib/follows/service.ts` uses in slice 6.
 
 ## API surface
 
@@ -425,30 +458,39 @@ either path.
 
 Shared components (`components/claps/`):
 
-- `<ClapButton
-    slug={string}
-    initialViewerCount={number}
-    initialTotalCount={number}
-    disabled?={boolean}
-    onAnonymousClick={() => void}
-  />` — client component. Uses React's `useOptimistic` hook to
-  render `viewerCount + pending` immediately on click, then
-  reconciles with the server response. Batches rapid clicks
-  behind a single in-flight POST (subsequent clicks queue as a
-  larger `delta` on the next request rather than firing one POST
-  per click — reduces server pressure without slowing the UI).
-  On a server error: reverts the optimistic delta and surfaces
-  a `role="alert"` message inline.
+- `<ClapButton>` — client component, one of two discriminated
+  variants selected at the render site by the parent server
+  component (never a runtime branch inside the client bundle,
+  so the anonymous DOM does not ship the optimistic-click JS):
 
-  - `disabled=true` when the viewer is the author (renders no
-    button at all — a disabled clap button on your own article
-    reads as an active affordance you're being denied, not as
-    "not applicable").
-  - `onAnonymousClick` — server-provided handler that
-    navigates to `/login?callbackUrl=<current-path>`. Anonymous
-    viewers still get the button so the affordance is
-    discoverable; the click is intercepted before any POST
-    fires. Same UX pattern as `<FollowButton>` in slice 6.
+  - **Signed-in variant** — `<ClapButton variant="signed-in"
+    slug={string} initialViewerCount={number}
+    initialTotalCount={number} />`. Uses React's `useOptimistic`
+    to render `viewerCount + pending` immediately on click, then
+    reconciles with the server response. Batches rapid clicks
+    behind a single in-flight POST (subsequent clicks queue as a
+    larger `delta` on the next request rather than firing one
+    POST per click — reduces server pressure without slowing the
+    UI). On a server error: reverts the optimistic delta and
+    surfaces a `role="alert"` message inline.
+  - **Anonymous variant** — `<ClapButton variant="anonymous"
+    slug={string} initialTotalCount={number}
+    articlePath={string} />`. Renders a `<Link href="/login?
+    callbackUrl=<articlePath>">` — an `<a>`, not a `<button>`,
+    with the same accessible-name prefix so screen readers hear
+    the same affordance. `articlePath` is a plain string built
+    by the server component (`/articles/${slug}`); no server-
+    side callback prop crosses the RSC/client boundary (RSC
+    props must be serializable, functions are not). Same
+    server-rendered-link pattern `<FollowButton>` uses in slice
+    6 for its anonymous branch.
+
+  Author-viewing-own-article: the parent server component renders
+  no `<ClapButton>` at all (only `<ClapCount>`). A disabled clap
+  button on your own article would read as an active affordance
+  you're being denied, not as "not applicable" — and keeping the
+  author branch out of the client bundle entirely means an author
+  can never re-enter it via a DOM-hack retry.
 
 - `<ClapCount count={number} />` — pure display, shared between
   `<ClapButton>` and `<ArticleCard>` so a change to the "0 → dim
