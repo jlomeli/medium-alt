@@ -8,6 +8,7 @@
  * "how is follow state written," one place to change if the write
  * path ever grows (denormalised counts, audit rows, etc.).
  */
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 
 /**
@@ -51,11 +52,10 @@ export async function follow(
   followerId: string,
   followingId: string,
 ): Promise<{ created: boolean; followedAt: Date }> {
-  // `upsert` on the composite PK gives us the natural "one row per
-  // (follower, following)" contract without a two-step find + create
-  // race. `update: {}` means "if it exists, touch nothing" — we
-  // preserve the original `createdAt` so a re-follow doesn't erase
-  // the historical timestamp.
+  // Fast path: probe first so the common "already following" case
+  // (repeat click, refresh spam) returns 200 without a doomed
+  // insert. Preserves the original `createdAt` so a re-follow
+  // doesn't erase the historical timestamp.
   const existing = await db.follow.findUnique({
     where: {
       followerId_followingId: { followerId, followingId },
@@ -63,11 +63,45 @@ export async function follow(
     select: { createdAt: true },
   });
   if (existing) return { created: false, followedAt: existing.createdAt };
-  const row = await db.follow.create({
-    data: { followerId, followingId },
-    select: { createdAt: true },
-  });
-  return { created: true, followedAt: row.createdAt };
+
+  // Concurrent-write reconciliation. Between the probe above and
+  // the create below, another request (a rapid double-click before
+  // the button's transition disables it, a curl on the side, a
+  // second tab) can insert the same `(followerId, followingId)` row
+  // and win the composite-PK race. Without the P2002 catch, the
+  // loser's `create` throws and the route returns 500 — a spec
+  // violation (POST /follow is contract-idempotent). Catching P2002
+  // + re-reading the winner keeps the idempotency guarantee even
+  // under overlap. Same cost on the happy path (no upsert, no
+  // extra round-trip); one extra findUnique only on the losing side
+  // of a race.
+  try {
+    const row = await db.follow.create({
+      data: { followerId, followingId },
+      select: { createdAt: true },
+    });
+    return { created: true, followedAt: row.createdAt };
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      const winner = await db.follow.findUnique({
+        where: {
+          followerId_followingId: { followerId, followingId },
+        },
+        select: { createdAt: true },
+      });
+      if (winner) {
+        // Report as "not created by us" so the route emits 200 —
+        // matches what a client would have seen if their request
+        // had arrived a millisecond later and taken the fast path
+        // above.
+        return { created: false, followedAt: winner.createdAt };
+      }
+    }
+    throw err;
+  }
 }
 
 /**

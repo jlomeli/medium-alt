@@ -106,6 +106,38 @@ test.describe("@smoke @api @regression follow endpoints", () => {
     expect(res.status()).toBe(401);
   });
 
+  test("concurrent POSTs stay idempotent (no P2002 leak)", async ({
+    loggedInPage,
+    userFactory,
+  }) => {
+    // Regression: two overlapping POSTs from the same viewer must
+    // both resolve with the contracted 200/201 body, not a 500 from
+    // the composite-PK race. `Promise.all` fires them in the same
+    // microtask so both hit the server before either completes.
+    const target = await userFactory.create();
+    const results = await Promise.all([
+      loggedInPage.request.post(`/api/users/${target.username}/follow`),
+      loggedInPage.request.post(`/api/users/${target.username}/follow`),
+    ]);
+    const bodies = await Promise.all(
+      results.map(async (r) => ({
+        status: r.status(),
+        body: (await r.json()) as { following: true; followedAt: string },
+      })),
+    );
+    for (const { status, body } of bodies) {
+      // One of these will be 201 (the winner) and one will be 200
+      // (the loser reconciled via P2002 catch) — but which is which
+      // depends on scheduling. What matters is neither is 5xx.
+      expect([200, 201]).toContain(status);
+      expect(body.following).toBe(true);
+      expect(typeof body.followedAt).toBe("string");
+    }
+    // Both responses' `followedAt` reflect the SAME row's createdAt —
+    // the loser was reconciled to the winner's timestamp.
+    expect(bodies[0]!.body.followedAt).toBe(bodies[1]!.body.followedAt);
+  });
+
   test("follow relationship is directional (A→B ≠ B→A)", async ({
     browser,
     baseURL,
