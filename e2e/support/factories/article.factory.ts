@@ -43,6 +43,14 @@ export type ArticleAttrs = {
   coverImageUrl?: string | null;
   coverImageAlt?: string | null;
   published?: boolean;
+  /**
+   * Slice 5 — tags to attach on create. Passed through to the API's
+   * `tags` field, which normalises through `parseTagInput` server-side.
+   * Test-authoring ergonomic: pass raw display names (`"Software
+   * Testing"`) and the server writes normalised slugs
+   * (`"software-testing"`).
+   */
+  tags?: readonly string[];
 };
 
 export type CreatedArticle = ArticleAttrs & {
@@ -93,7 +101,14 @@ export class ArticleFactory {
     // keeps the plain-string body so downstream assertions like
     // `.toContainText(article.body)` stay ergonomic.
     const res = await api.post("/api/articles", {
-      data: { ...attrs, body: plainTextToTiptap(attrs.body) },
+      data: {
+        ...attrs,
+        body: plainTextToTiptap(attrs.body),
+        // Only include `tags` when the caller opted in; the API's Zod
+        // schema treats missing/omitted as "no tags," which is the
+        // desired default for tests that don't care.
+        ...(attrs.tags !== undefined ? { tags: attrs.tags } : {}),
+      },
     });
     if (!res.ok()) {
       throw new Error(

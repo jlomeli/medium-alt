@@ -7,6 +7,11 @@
 import { z } from "zod";
 import { isAllowedHref } from "@/lib/articles/tiptap-extensions";
 import { isAllowedUploadUrl } from "@/lib/uploads/host-allowlist";
+import {
+  MAX_TAGS_PER_ARTICLE,
+  MAX_TAG_SLUG_LENGTH,
+  parseTagInput,
+} from "@/lib/tags/slug";
 
 /** 1..120 chars — enough for a headline, short enough to render on one line. */
 export const titleSchema = z
@@ -230,6 +235,50 @@ export const coverImageAltSchema = z
   .max(200, { message: "Cover alt text must be at most 200 characters" })
   .nullable();
 
+// -------- Tags (slice 5) --------
+
+/**
+ * Tag list on write. Accepts either an array of raw strings or a
+ * comma-separated single string (the editor input format). Normalises
+ * via `parseTagInput`, deduplicates by slug, and enforces the per-
+ * article + per-slug caps from docs/specs/tags-feed.md.
+ *
+ * Errors are field-scoped on `tags` so the form can attach the
+ * message to the right input. The order of the failure branches
+ * mirrors "what would a caller hit first":
+ *   1. `empty` — an entry that normalised to `""` (e.g. `"---"`).
+ *   2. `too-many` — more than `MAX_TAGS_PER_ARTICLE` unique slugs.
+ *   3. `too-long` — any single slug over `MAX_TAG_SLUG_LENGTH`.
+ */
+export const tagsSchema = z
+  .union([z.array(z.string()), z.string()])
+  .transform((input, ctx) => {
+    const { tags, empty } = parseTagInput(input);
+    if (empty.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Tag "${empty[0]}" has no letters or numbers`,
+      });
+      return z.NEVER;
+    }
+    if (tags.length > MAX_TAGS_PER_ARTICLE) {
+      ctx.addIssue({
+        code: "custom",
+        message: `At most ${MAX_TAGS_PER_ARTICLE} tags per article`,
+      });
+      return z.NEVER;
+    }
+    const overCap = tags.find((t) => t.slug.length > MAX_TAG_SLUG_LENGTH);
+    if (overCap) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Tag "${overCap.name}" is longer than ${MAX_TAG_SLUG_LENGTH} characters`,
+      });
+      return z.NEVER;
+    }
+    return tags;
+  });
+
 export const createArticleSchema = z.object({
   title: titleSchema,
   subtitle: subtitleSchema.optional(),
@@ -237,6 +286,7 @@ export const createArticleSchema = z.object({
   published: z.boolean().optional(),
   coverImageUrl: coverImageUrlSchema.optional(),
   coverImageAlt: coverImageAltSchema.optional(),
+  tags: tagsSchema.optional(),
 });
 export type CreateArticleInput = z.infer<typeof createArticleSchema>;
 
@@ -259,6 +309,10 @@ export const updateArticleSchema = z
     published: z.boolean().optional(),
     coverImageUrl: coverImageUrlSchema.optional(),
     coverImageAlt: coverImageAltSchema.optional(),
+    // Providing `tags` (even as `[]`) replaces the article's tag set;
+    // omitting the key leaves tags untouched. Same partial-update
+    // semantics as the rest of the fields.
+    tags: tagsSchema.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "At least one field must be provided",

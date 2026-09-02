@@ -12,10 +12,11 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { updateArticleSchema } from "@/lib/validation/article";
-import { articleViewSelect } from "@/lib/articles/view";
+import { articleViewSelect, shapeArticleView } from "@/lib/articles/view";
 import { collectImageKeys } from "@/lib/articles/image-keys";
 import { getStorage } from "@/lib/uploads/storage";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
+import { tagConnectPayload } from "@/lib/tags/connect";
 
 export async function GET(
   _req: Request,
@@ -39,7 +40,7 @@ export async function GET(
   }
 
   const { authorId: _authorId, ...view } = article;
-  return NextResponse.json({ article: view });
+  return NextResponse.json({ article: shapeArticleView(view) });
 }
 
 export async function PATCH(
@@ -126,6 +127,16 @@ export async function PATCH(
   const togglingPublish = parsed.data.published !== undefined;
   const wantsPublish = parsed.data.published === true;
 
+  // Slice 5 — tag replace payload. Computed OUTSIDE the transaction so
+  // the row-lock below doesn't hold across an N-write tag upsert. Bounded
+  // by MAX_TAGS_PER_ARTICLE (5), so worst-case latency is 5 sequential
+  // upserts before the transaction opens. `undefined` when the caller
+  // omitted the field — partial-update semantics, tags untouched.
+  const tagsPayload =
+    parsed.data.tags !== undefined
+      ? await tagConnectPayload(db, parsed.data.tags)
+      : undefined;
+
   try {
     const updated = await db.$transaction(async (tx) => {
       if (togglingPublish) {
@@ -158,11 +169,16 @@ export async function PATCH(
       }
       return tx.article.update({
         where: { id: existing.id },
-        data,
+        data: {
+          ...data,
+          // `set: [...]` replaces the full tag join in one op — the
+          // author's exact list wins. `set: []` clears the join.
+          ...(tagsPayload ? { tags: { set: tagsPayload.set } } : {}),
+        },
         select: articleViewSelect,
       });
     });
-    return NextResponse.json({ article: updated });
+    return NextResponse.json({ article: shapeArticleView(updated) });
   } catch (err) {
     // Concurrent DELETE landed between the ownership lookup and the
     // update — surface as 404 (the row is gone), not a 500.

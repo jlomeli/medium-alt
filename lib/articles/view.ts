@@ -24,6 +24,13 @@ export interface ArticleView {
     username: string | null;
     name: string | null;
   };
+  /**
+   * Slice 5 — sorted list of tag slugs. Present on every response
+   * shape so a client can render tag chips without a second round
+   * trip. Sorted for deterministic diffs (the DB doesn't guarantee an
+   * order across the many-to-many).
+   */
+  tags: string[];
 }
 
 /** Prisma `select` matching `ArticleView`. Kept next to the shape so a
@@ -42,4 +49,46 @@ export const articleViewSelect = {
   author: {
     select: { username: true, name: true },
   },
+  tags: { select: { slug: true } },
 } as const;
+
+/**
+ * Shape a raw Prisma row (as selected via `articleViewSelect`) into
+ * an `ArticleView`. Flattens the tag relation into the sorted string
+ * array the API returns.
+ *
+ * Centralised so every route handler that reads an article passes
+ * through the same normalisation — no risk of one route returning
+ * `tags: [{ slug: "…" }]` and another returning `tags: string[]`.
+ */
+export function shapeArticleView<
+  T extends {
+    slug: string;
+    title: string;
+    subtitle: string | null;
+    body: unknown;
+    coverImageUrl: string | null;
+    coverImageAlt: string | null;
+    published: boolean;
+    publishedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    author: { username: string | null; name: string | null };
+    tags: Array<{ slug: string }>;
+  },
+>(row: T): ArticleView {
+  return {
+    slug: row.slug,
+    title: row.title,
+    subtitle: row.subtitle,
+    body: row.body as string,
+    coverImageUrl: row.coverImageUrl,
+    coverImageAlt: row.coverImageAlt,
+    published: row.published,
+    publishedAt: row.publishedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    author: row.author,
+    tags: row.tags.map((t) => t.slug).sort(),
+  };
+}

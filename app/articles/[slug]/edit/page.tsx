@@ -30,6 +30,7 @@ export default async function EditArticlePage({
       coverImageAlt: true,
       published: true,
       authorId: true,
+      tags: { select: { slug: true } },
     },
   });
   if (!article || article.authorId !== session.user.id) notFound();
@@ -48,6 +49,13 @@ export default async function EditArticlePage({
         coverImageUrl: article.coverImageUrl,
         coverImageAlt: article.coverImageAlt,
         published: article.published,
+        // Prefill from the article's current tag slugs (sorted for a
+        // stable text representation across renders). Editor input is
+        // comma-separated; the same shape the server parses.
+        tags: article.tags
+          .map((t) => t.slug)
+          .sort()
+          .join(", "),
       }}
     />
   );
