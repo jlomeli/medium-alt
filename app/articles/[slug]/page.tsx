@@ -6,6 +6,7 @@ import { renderTiptap, type TiptapDoc } from "@/lib/articles/tiptap";
 import { TagChip } from "@/components/feed/TagChip";
 import { ClapButton } from "@/components/claps/ClapButton";
 import { ClapCount } from "@/components/claps/ClapCount";
+import { CommentsSection } from "@/components/comments/CommentsSection";
 import {
   getViewerClapState,
   sumClapsForArticle,
@@ -196,6 +197,18 @@ export default async function ArticleReadPage({
             Edit
           </Link>
         </div>
+      )}
+      {/*
+        Slice 8 — comment thread. Mounted here (not inside
+        `<CommentsSection>`) so the "no comments on drafts, even
+        own" rule is a compile-time property of this file, matching
+        the slice-7 clap-section guard above. Anonymous readers see
+        the list + a sign-in link; signed-in readers see the list
+        + `<CommentForm>`; own-draft view has no section in the
+        DOM at all.
+      */}
+      {article.published && (
+        <CommentsSection slug={article.slug} articleId={article.id} />
       )}
     </main>
   );

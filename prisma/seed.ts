@@ -34,7 +34,8 @@ async function main() {
       `articles +${summary.articles.created} (skipped ${summary.articles.skipped}), ` +
       `tags +${summary.tags.created} (skipped ${summary.tags.skipped}), ` +
       `follows +${summary.follows.created} (skipped ${summary.follows.skipped}), ` +
-      `claps +${summary.claps.created} (skipped ${summary.claps.skipped}).`,
+      `claps +${summary.claps.created} (skipped ${summary.claps.skipped}), ` +
+      `comments +${summary.comments.created} (skipped ${summary.comments.skipped}).`,
   );
 }
 

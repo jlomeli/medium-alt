@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth/config";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
 import { FollowButton } from "@/components/profile/FollowButton";
 import { ClapCount } from "@/components/claps/ClapCount";
+import { CommentCount } from "@/components/comments/CommentCount";
 import { listPublishedArticlesByUsername } from "@/lib/articles/service";
 import { isFollowing } from "@/lib/follows/service";
 
@@ -109,8 +110,14 @@ export default async function PublicProfilePage({
                   surfaces so `getByLabel("Clap count")` in tests works
                   uniformly.
                 */}
-                <p className="mt-1">
+                <p className="mt-1 flex flex-wrap items-center gap-x-2">
                   <ClapCount count={article.clapCount} />
+                  {/*
+                    Slice 8 — comment count next to clap count on the
+                    profile listing, same "always render" discipline.
+                  */}
+                  <span aria-hidden="true">·</span>
+                  <CommentCount count={article.commentCount} />
                 </p>
               </li>
             ))}

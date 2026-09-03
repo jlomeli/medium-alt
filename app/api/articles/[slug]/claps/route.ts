@@ -23,7 +23,6 @@
  *     New codes: `slug`/`self-clap`, `delta`/`out-of-range`.
  */
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import {
   addClaps,
@@ -31,25 +30,10 @@ import {
   ClapTargetMissingError,
 } from "@/lib/claps/service";
 import { addClapsSchema } from "@/lib/validation/claps";
-
-/**
- * Look up an article by slug and decide whether the caller may act on
- * it. Draft articles are visible only to their author; every other
- * caller sees 404. Matches the `GET /api/articles/{slug}` visibility
- * rule so a client can't discover draft slugs by probing this endpoint.
- */
-async function resolveArticleForCaller(
-  slug: string,
-  callerId: string,
-): Promise<{ id: string; authorId: string } | null> {
-  const row = await db.article.findUnique({
-    where: { slug },
-    select: { id: true, authorId: true, published: true },
-  });
-  if (!row) return null;
-  if (!row.published && row.authorId !== callerId) return null;
-  return { id: row.id, authorId: row.authorId };
-}
+// Hoisted out of this file in slice 8 so the comments write path can
+// share one implementation. Behavior unchanged — we still ignore the
+// `published` boolean the widened return now carries.
+import { resolveArticleForCaller } from "@/lib/articles/access";
 
 export async function POST(
   req: Request,

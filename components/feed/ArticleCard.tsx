@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { PublicArticleSummary } from "@/lib/articles/service";
 import { ClapCount } from "@/components/claps/ClapCount";
+import { CommentCount } from "@/components/comments/CommentCount";
 import { TagChip } from "./TagChip";
 
 /**
@@ -50,6 +51,12 @@ export function ArticleCard({ article }: { article: PublicArticleSummary }) {
         */}
         <span aria-hidden="true">·</span>
         <ClapCount count={article.clapCount} />
+        {/*
+          Slice 8 — comment count on every card. Same
+          "always render, even zero" discipline as clapCount.
+        */}
+        <span aria-hidden="true">·</span>
+        <CommentCount count={article.commentCount} />
       </p>
       {article.tags.length > 0 && (
         <ul aria-label="Tags" className="mt-3 flex flex-wrap gap-2">

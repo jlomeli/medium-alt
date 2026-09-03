@@ -38,6 +38,14 @@ export interface ArticleView {
    */
   clapCount: number;
   /**
+   * Slice 8 — aggregate comment count across every commenter.
+   * Always present (0 for a never-commented article, and 0 for a
+   * draft — drafts render no comments section). Uniform rendering,
+   * same discipline as `clapCount`. See docs/specs/comments.md §
+   * Additive shape changes.
+   */
+  commentCount: number;
+  /**
    * Slice 7 — the current viewer's contribution + a convenience
    * `hasClapped` boolean. Present ONLY when the caller is
    * authenticated; for anonymous callers this key is OMITTED from
@@ -106,6 +114,7 @@ export function shapeArticleView<
     clapCount: number;
     viewer?: { clapCount: number; hasClapped: boolean };
   },
+  commentCount: number,
 ): ArticleView {
   return {
     slug: row.slug,
@@ -121,6 +130,7 @@ export function shapeArticleView<
     author: row.author,
     tags: row.tags.map((t) => t.slug).sort(),
     clapCount: claps.clapCount,
+    commentCount,
     // Spread the viewer block only when supplied so the JSON output
     // has NO `viewer` key at all for anonymous callers. Present-vs-
     // absent is the contract; `null` would collapse two distinct

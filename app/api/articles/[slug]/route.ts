@@ -17,6 +17,7 @@ import {
   getViewerClapState,
   sumClapsForArticle,
 } from "@/lib/claps/service";
+import { countCommentsForArticle } from "@/lib/comments/service";
 import { collectImageKeys } from "@/lib/articles/image-keys";
 import { getStorage } from "@/lib/uploads/storage";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
@@ -44,23 +45,26 @@ export async function GET(
     }
   }
 
-  // Slice 7 — enrich with the aggregate + optional viewer block. The
-  // two aggregates run in parallel with each other (both DB reads);
-  // when the caller is anonymous the viewer read is skipped entirely
-  // and the `viewer` key stays absent from the response.
-  const [clapCount, viewerState] = await Promise.all([
+  // Slice 7/8 — enrich with the aggregate + optional viewer block +
+  // comment count. All three reads run in parallel; when the caller is
+  // anonymous the viewer read is skipped entirely and the `viewer` key
+  // stays absent from the response. `commentCount` is unconditional
+  // (0 for drafts naturally — no comment can attach to a draft).
+  const [clapCount, viewerState, commentCount] = await Promise.all([
     sumClapsForArticle(article.id),
     session?.user
       ? getViewerClapState(session.user.id, article.id)
       : Promise.resolve(undefined),
+    countCommentsForArticle(article.id),
   ]);
 
   const { id: _id, authorId: _authorId, ...view } = article;
   return NextResponse.json({
-    article: shapeArticleView(view, {
-      clapCount,
-      viewer: viewerState,
-    }),
+    article: shapeArticleView(
+      view,
+      { clapCount, viewer: viewerState },
+      commentCount,
+    ),
   });
 }
 
@@ -204,13 +208,21 @@ export async function PATCH(
     // Authors can't self-clap, so `viewer` is always
     // `{ clapCount: 0, hasClapped: false }`. The aggregate can be
     // non-zero (other readers may have clapped a previously-published
-    // article that's now being edited), so we still read it.
-    const clapCount = await sumClapsForArticle(existing.id);
+    // article that's now being edited), so we still read it. Slice 8
+    // — same for the comment count.
+    const [clapCount, commentCount] = await Promise.all([
+      sumClapsForArticle(existing.id),
+      countCommentsForArticle(existing.id),
+    ]);
     return NextResponse.json({
-      article: shapeArticleView(updated, {
-        clapCount,
-        viewer: { clapCount: 0, hasClapped: false },
-      }),
+      article: shapeArticleView(
+        updated,
+        {
+          clapCount,
+          viewer: { clapCount: 0, hasClapped: false },
+        },
+        commentCount,
+      ),
     });
   } catch (err) {
     // Concurrent DELETE landed between the ownership lookup and the
