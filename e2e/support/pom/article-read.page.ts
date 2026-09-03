@@ -24,6 +24,18 @@ export class ArticleReadPage extends BasePage {
   readonly clapLink;
   readonly clapTotal;
   readonly clapError;
+  // Slice 8 — comments. `commentsRegion` scopes queries so the same
+  // accessible names ("Post comment", "Write a comment", per-item
+  // "Delete your comment posted <time>") stay unambiguous even when a
+  // future slice adds a global commentary panel.
+  readonly commentsRegion;
+  readonly commentsHeading;
+  readonly commentForm;
+  readonly commentTextarea;
+  readonly commentSubmit;
+  readonly commentError;
+  readonly commentList;
+  readonly signInToCommentLink;
 
   constructor(page: Page) {
     super(page);
@@ -52,6 +64,51 @@ export class ArticleReadPage extends BasePage {
     // Optimistic-UI error surfaces here on POST failure. `role="alert"`
     // is announced to screen readers on insertion.
     this.clapError = this.clapRegion.getByRole("alert");
+
+    // Comments — see docs/specs/comments.md § UI surface. The section
+    // is a `<section aria-labelledby="comments-heading">` with a `<h2
+    // id="comments-heading">Comments (N)</h2>` inside it, so the
+    // region's accessible name is "Comments (N)" — a `/^Comments/`
+    // pattern keeps the locator robust as N changes.
+    this.commentsRegion = this.page.getByRole("region", {
+      name: /^Comments/,
+    });
+    this.commentsHeading = this.commentsRegion.getByRole("heading", {
+      level: 2,
+      name: /^Comments/,
+    });
+    this.commentForm = this.commentsRegion.getByRole("form", {
+      name: "Post a comment",
+    });
+    this.commentTextarea = this.commentForm.getByRole("textbox", {
+      name: "Write a comment",
+    });
+    this.commentSubmit = this.commentForm.getByRole("button", {
+      name: "Post comment",
+    });
+    // Zod / server-side validation surfaces in a role="alert" sibling
+    // to the textarea (also announced on insertion).
+    this.commentError = this.commentForm.getByRole("alert");
+    // The list is a `<ul>` / `<ol>` — assertions on ordering and
+    // membership go through .getByRole('listitem') off this locator.
+    this.commentList = this.commentsRegion.getByRole("list");
+    // Anonymous fallback renders as a link (not a button), same
+    // pattern as ClapButton variant="anonymous".
+    this.signInToCommentLink = this.commentsRegion.getByRole("link", {
+      name: /^Sign in or sign up to leave a comment/,
+    });
+  }
+
+  /**
+   * A single comment card, scoped by its author's display name.
+   * Returned as a listitem locator so callers can further chain
+   * `.getByRole("button", { name: /^Delete your comment/ })` off it
+   * without accidentally matching a delete button on a different row.
+   */
+  commentItemByAuthor(authorName: string) {
+    return this.commentList
+      .getByRole("listitem")
+      .filter({ hasText: authorName });
   }
 
   async gotoSlug(slug: string): Promise<void> {

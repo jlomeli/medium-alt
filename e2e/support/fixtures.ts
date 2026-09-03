@@ -3,6 +3,7 @@ import { UserFactory, type CreatedUser } from "./factories/user.factory";
 import { ArticleFactory } from "./factories/article.factory";
 import { FollowFactory } from "./factories/follow.factory";
 import { ClapFactory } from "./factories/clap.factory";
+import { CommentFactory } from "./factories/comment.factory";
 import { ImageFactory } from "./factories/image.factory";
 import { MailpitClient } from "./clients/mailpit.client";
 
@@ -26,6 +27,7 @@ type Fixtures = {
   articleFactory: ArticleFactory;
   followFactory: FollowFactory;
   clapFactory: ClapFactory;
+  commentFactory: CommentFactory;
   imageFactory: ImageFactory;
   testUser: CreatedUser;
   loggedInPage: Page;
@@ -61,6 +63,13 @@ export const test = base.extend<Fixtures>({
     // can have multiple readers clap on the same article without
     // re-instantiating.
     await use(new ClapFactory());
+  },
+
+  commentFactory: async ({}, use) => {
+    // Context-free — same rationale as `followFactory`. A single test
+    // can have multiple commenters post on the same article without
+    // re-instantiating.
+    await use(new CommentFactory());
   },
 
   imageFactory: async ({}, use) => {
