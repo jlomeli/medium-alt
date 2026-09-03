@@ -215,5 +215,22 @@ export async function deleteComment(
   if (row.authorId !== callerId) {
     throw new CommentForbiddenError();
   }
-  await db.comment.delete({ where: { id: commentId } });
+  try {
+    await db.comment.delete({ where: { id: commentId } });
+  } catch (err) {
+    // Race: a concurrent DELETE (double-click, retry, or the parent
+    // Article being cascade-deleted) removes the row between the
+    // findUnique above and this delete. Prisma raises P2025 on
+    // "record to delete does not exist" — surface as the same
+    // `CommentTargetMissingError` the caller already translates to
+    // 404, not an uncaught 500. Matches the ClapTargetMissingError
+    // handling in the claps route.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2025"
+    ) {
+      throw new CommentTargetMissingError();
+    }
+    throw err;
+  }
 }
