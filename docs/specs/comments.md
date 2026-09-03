@@ -488,10 +488,14 @@ no race, no `FOR UPDATE`. The service wraps them for testability
 but doesn't need a transaction:
 
 - `createComment(authorId, articleId, body): Promise<Comment>` —
-  single `create`. The 400 for empty/too-long body is Zod's
-  job upstream; the service assumes a valid body and lets
-  Prisma surface any DB-level violation (there is none — the
-  column is `Text`).
+  single `create`. The 400 for empty/too-long body is Zod's job
+  upstream; the "no comments on drafts (even own)" 404 is the
+  caller's job (see § UI surface / `<CommentForm>` step 4 for
+  the server action, and the same check on the POST route
+  handler). The service assumes the article has already been
+  resolved *and* verified `publishedAt != null`, and lets Prisma
+  surface any DB-level violation (there is none — the column
+  is `Text`).
 - `deleteComment(commentId, callerId): Promise<void>` — a
   `findUniqueOrThrow` on the id (surfaces to 404 at the route),
   then an authorship check (surfaces to 403), then a `delete`.
@@ -551,14 +555,22 @@ New components (`components/comments/`):
      `{ error: { field: "body", code: "out-of-range" } }` in
      the `useFormState` slot the client already renders.
   3. Resolves the article via the shared
-     `resolveArticleForCaller` helper (same 404 rules as the
-     POST route — draft-not-owned-by-caller is 404, published
-     drafts are 404, unknown slug is 404).
-  4. Calls `createComment(authorId, articleId, body)` from
+     `resolveArticleForCaller` helper (unknown slug → 404;
+     draft not owned by the caller → 404). Note the helper
+     *returns* an owned draft — that's what makes the edit-my-
+     draft path work — so it alone is **not** sufficient here.
+  4. Rejects a resolved draft with a shaped 404 error even when
+     the caller owns it (`article.publishedAt == null` →
+     `{ error: "not-found" }`). This matches the POST route
+     contract that all drafts, including own drafts, return
+     404 — an unpublished article has no reader audience for a
+     comment. The POST route handler applies the same check
+     against the same helper for the same reason, so the two
+     write paths cannot drift.
+  5. Calls `createComment(authorId, articleId, body)` from
      `lib/comments/service.ts` — the same service function the
-     POST route handler uses, so the two write paths cannot
-     drift.
-  5. `revalidatePath('/articles/' + slug)` on success so the
+     POST route handler uses.
+  6. `revalidatePath('/articles/' + slug)` on success so the
      RSC re-renders the list with the new row.
 
   The client wraps this action with `useFormState` +
