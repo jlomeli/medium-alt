@@ -408,15 +408,36 @@ Response shapes:
   `number` (nonnegative integer).
 
 Internally, `lib/comments/service.ts` also exposes a
-`CommentWithAuthorship = Comment & { authorId: string }` shape
-that the RSC on `/articles/[slug]` consumes directly (never
-crossing the API boundary). This is the shape `<CommentItem>` gets
-and the shape used for the `session.user.id === comment.authorId`
-ownership check that gates the delete affordance — a stable id
-comparison, not a username string compare that could false-match
-across a rename in a future slice. `GET /api/articles/{slug}/
-comments` projects `CommentWithAuthorship` down to the public
-`Comment` before serializing.
+`CommentWithAuthorship` shape that the RSC on `/articles/[slug]`
+consumes directly (never crossing the API boundary):
+
+```ts
+type CommentWithAuthorship = {
+  id: string;
+  body: string;
+  createdAt: Date;
+  authorId: string;
+  author: {
+    username: string | null;
+    name: string | null;
+    image: string | null;
+  };
+};
+```
+
+Note the deliberate divergence from the public `Comment` on
+`createdAt`: Prisma returns a `Date`, and the RSC hands that
+`Date` straight to a `<time>` renderer, so keeping the internal
+type native avoids an unchecked cast or a premature stringify
+in the service. The HTTP boundary is where the shape becomes
+public: `GET /api/articles/{slug}/comments` projects each row
+to the public `Comment` via `.toISOString()` on `createdAt` and
+by dropping `authorId` before serializing. `<CommentItem>`
+receives `CommentWithAuthorship` and uses
+`session.user.id === comment.authorId` to gate the delete
+affordance — a stable id comparison, not a username string
+compare that could false-match across a rename in a future
+slice.
 
 ### Error shape
 
@@ -656,9 +677,8 @@ New components (`components/comments/`):
   7. Returns `{ status: "success", submittedAt: Date.now() }`.
 
   The client wraps this action with `useActionState` (React 19;
-  the older `useFormState` name is a compatibility alias) and
-  `useFormStatus` for the pending / error / cleared states.
-  Renders:
+  the older `useFormState` name is a compatibility alias) for
+  the idle / success / error state transitions. Renders:
   - the `<textarea>` with `key={state.status === "success" ?
     state.submittedAt : "draft"}` — a new `key` on success
     remounts the field to an empty value, and a `useEffect` on
@@ -666,8 +686,37 @@ New components (`components/comments/`):
   - a `role="alert"` sibling that renders the shaped
     `state.error.message` (or a code-to-copy lookup) when
     `state.status === "error"`;
-  - the submit button labeled `"Post comment"`, disabled while
-    `useFormStatus().pending`.
+  - a `<PostCommentSubmit>` sub-component (see below) as the
+    submit button.
+
+  Pending state comes from `useFormStatus`, which is only
+  available to components rendered **as descendants of the
+  `<form>`** — a component that itself renders the `<form>`
+  will read the default `{ pending: false }` and never disable
+  its own button, so a double-click posts twice. Slice 8
+  therefore ships a tiny nested client component:
+
+  ```tsx
+  // components/comments/PostCommentSubmit.tsx
+  "use client";
+  import { useFormStatus } from "react-dom";
+
+  export function PostCommentSubmit() {
+    const { pending } = useFormStatus();
+    return (
+      <button type="submit" disabled={pending}>
+        {pending ? "Posting…" : "Post comment"}
+      </button>
+    );
+  }
+  ```
+
+  `<CommentForm>` mounts `<PostCommentSubmit />` inside its
+  `<form>`, so the hook resolves against the correct
+  `<form>`'s pending state and the button disables for the
+  duration of the server action. This is the same
+  parent-owns-form / child-owns-`useFormStatus` split React 19
+  requires for every submit-button-with-spinner pattern.
 
   The POST route handler still exists (and covers the same
   behavior — the API tests exercise it), but the UI path is
