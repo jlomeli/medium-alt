@@ -171,17 +171,12 @@ export async function addClaps(
     //     ClapTargetMissingError so the route replies 404 rather
     //     than leaking a 500.
     const initialDelta = Math.min(delta, MAX_CLAPS_PER_VIEWER);
+    let createSucceeded = false;
     try {
       await db.clap.create({
         data: { userId, articleId, count: initialDelta },
       });
-      const totalCount = await sumClapsForArticle(articleId);
-      return {
-        created: true,
-        applied: initialDelta,
-        viewerCount: initialDelta,
-        totalCount,
-      };
+      createSucceeded = true;
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError) {
         if (err.code === "P2003") {
@@ -196,6 +191,34 @@ export async function addClaps(
       } else {
         throw err;
       }
+    }
+    if (createSucceeded) {
+      // Re-read the row we just wrote and the aggregate together.
+      // The null-check on `viewer` guards a narrow race: if the
+      // article is cascade-deleted between our create commit and
+      // this read, the clap row is gone and `sumClapsForArticle`
+      // returns 0. Without this check the route would ship a 201
+      // with `{ viewerCount: initialDelta, totalCount: 0 }` — a
+      // contradiction, and worse, a leak that the article existed
+      // moments ago. Instead surface the article's disappearance
+      // as the same 404 the caller would see if the slug had never
+      // existed.
+      const [viewer, totalCount] = await Promise.all([
+        db.clap.findUnique({
+          where: { userId_articleId: { userId, articleId } },
+          select: { count: true },
+        }),
+        sumClapsForArticle(articleId),
+      ]);
+      if (!viewer) {
+        throw new ClapTargetMissingError();
+      }
+      return {
+        created: true,
+        applied: initialDelta,
+        viewerCount: viewer.count,
+        totalCount,
+      };
     }
   }
 
@@ -261,10 +284,20 @@ export async function addClaps(
     }),
     sumClapsForArticle(articleId),
   ]);
+  // Same cascade-delete race guard as the first-clap path above: if
+  // the article vanished between the transaction commit and this
+  // read, the clap row is gone. Return 404 rather than a 200 with
+  // zeros — a caller can't distinguish "the article just got
+  // deleted" from "your write silently landed on nothing", and the
+  // anti-enumeration contract already says the correct answer is
+  // "does not exist".
+  if (!viewer) {
+    throw new ClapTargetMissingError();
+  }
   return {
     created: false,
     applied,
-    viewerCount: viewer?.count ?? 0,
+    viewerCount: viewer.count,
     totalCount,
   };
 }
