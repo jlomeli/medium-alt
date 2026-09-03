@@ -6,10 +6,17 @@
  *
  * Two variants, decided at render time by the parent:
  *   1. Signed-in + viewer is NOT the article's author — renders a
- *      `<button>` with `useOptimistic` semantics. Click bumps the
- *      count immediately (the whole reason this slice exists); the
- *      POST fires in the background. Multiple rapid clicks queue up
+ *      `<button>` that layers a pending delta on top of the server-
+ *      truth count. Click bumps the visible count immediately (the
+ *      whole reason this slice exists) via plain `useState`; the
+ *      POST fires in the background and reduces the overlay by the
+ *      applied amount on response. Multiple rapid clicks queue up
  *      as one `delta: N` batch behind a single in-flight request.
+ *      We deliberately do NOT use `useOptimistic` here: its "value
+ *      is visible only for the duration of one action" contract
+ *      does not survive the queued-click drain path, so a plain
+ *      pending-delta state gives predictable semantics for the
+ *      whole tap-storm lifecycle.
  *   2. Signed-in + viewer IS the author — this component is NOT
  *      rendered at all (the parent RSC checks `isAuthor` and emits
  *      only the static `<ClapCount>` instead). Kept OUT of this
@@ -31,7 +38,7 @@
  * what actually saved. Button stays enabled so a retry is one click
  * away.
  */
-import { useOptimistic, useRef, useState, useTransition } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { MAX_CLAPS_PER_VIEWER } from "@/lib/validation/claps";
 import { ClapCount } from "./ClapCount";
@@ -102,27 +109,22 @@ function SignedInClapButton({
   initialTotalCount,
 }: ClapButtonSignedInProps) {
   // Server-truth state. Updated only when a POST returns successfully.
-  // The optimistic layer above adds pending deltas on top for the
-  // immediate visual response.
   const [committed, setCommitted] = useState<ServerClapState>({
     viewerCount: initialViewerCount,
     totalCount: initialTotalCount,
   });
-
-  // `useOptimistic` seeds from `committed` and merges a pending delta
-  // whenever the click handler updates. On revert (see catch below),
-  // we throw the pending delta away by re-setting `committed` to
-  // itself with `flushSync`-adjacent semantics — the optimistic hook
-  // re-derives from the current committed state.
-  const [optimistic, addOptimistic] = useOptimistic<
-    ServerClapState,
-    number
-  >(committed, (state, delta) => ({
-    viewerCount: Math.min(state.viewerCount + delta, MAX_CLAPS_PER_VIEWER),
-    totalCount: state.totalCount + delta,
-  }));
-
-  const [, startTransition] = useTransition();
+  // Pending delta layered on top of `committed` for the optimistic
+  // render. Bumped in the click handler *before* the fetch fires;
+  // reduced by the applied amount when the POST returns; cleared
+  // outright on error. Kept as plain `useState` rather than
+  // `useOptimistic` because we need the pending value to survive
+  // across an arbitrary number of clicks + one batched drain POST,
+  // and useOptimistic's "visible only for the duration of one
+  // action" contract does not fit that lifecycle: a queued click's
+  // sync `startTransition(() => addOptimistic(1))` ends the moment
+  // its callback returns, reverting its +1 before the DOM ever
+  // renders it.
+  const [pendingDelta, setPendingDelta] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   // Batching queue. Between the moment a click fires and the moment
@@ -137,61 +139,54 @@ function SignedInClapButton({
   const pendingRef = useRef(0);
   const inFlightRef = useRef(false);
 
+  const displayedViewerCount = Math.min(
+    committed.viewerCount + pendingDelta,
+    MAX_CLAPS_PER_VIEWER,
+  );
+  const displayedTotalCount = committed.totalCount + pendingDelta;
+
   async function flushDelta(delta: number) {
-    // `startTransition` scopes both the optimistic mutation and the
-    // subsequent server-state commit so React can prioritise other
-    // renders. Without it, `useOptimistic` outside a transition
-    // throws in strict mode.
     inFlightRef.current = true;
-    let applied = delta;
     try {
-      startTransition(() => {
-        addOptimistic(delta);
-      });
-      const res = await fetch(`/api/articles/${encodeURIComponent(slug)}/claps`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ delta }),
-      });
+      const res = await fetch(
+        `/api/articles/${encodeURIComponent(slug)}/claps`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ delta }),
+        },
+      );
       if (!res.ok) throw new Error(`POST /claps returned ${res.status}`);
       const body = (await res.json()) as ServerClapState;
-      // Commit the server truth. The optimistic delta is discarded
-      // in favour of the authoritative numbers — `useOptimistic`
-      // re-seeds from `committed` on the next render.
-      startTransition(() => {
-        setCommitted(body);
-        setError(null);
-      });
+      // Reduce the pending overlay by the delta we just committed.
+      // Follow-up clicks that arrived mid-flight (tracked in
+      // `pendingRef`) are still represented in `pendingDelta` and
+      // stay visible until the drain POST below returns and
+      // subtracts them in turn. The server's totals become the new
+      // authoritative baseline in the same setState so the render
+      // shows one consistent number, not committed(new) +
+      // pending(old-not-yet-subtracted).
+      setCommitted(body);
+      setPendingDelta((p) => p - delta);
+      setError(null);
     } catch (err) {
-      // Revert the optimistic bump by reasserting the current
-      // `committed` state and surfacing the error. The catch runs
-      // OUTSIDE the transition — startTransition swallows thrown
-      // promises silently, so the alert wouldn't render if we
-      // resurfaced there.
+      // Revert the optimistic bump AND drop any queued follow-ups.
+      // Silently re-firing while the user is reading "please try
+      // again" would be dishonest.
       console.warn("[ClapButton] POST /claps failed", err);
-      startTransition(() => {
-        // Re-set committed to the same reference to trigger a re-
-        // render; `useOptimistic` then derives from committed
-        // without the pending delta.
-        setCommitted((c) => ({ ...c }));
-        setError("Couldn't save your clap — please try again.");
-      });
-      // On failure, drop any queued follow-ups too. Bailing on the
-      // queue keeps the error alert honest: we're not silently
-      // re-firing while the user is looking at "please try again".
+      setPendingDelta((p) => p - delta - pendingRef.current);
       pendingRef.current = 0;
-      applied = 0;
+      setError("Couldn't save your clap — please try again.");
+      inFlightRef.current = false;
+      return;
     } finally {
       inFlightRef.current = false;
     }
 
     // Drain any deltas that arrived while we were in flight.
-    if (pendingRef.current > 0 && applied > 0) {
+    if (pendingRef.current > 0) {
       const next = pendingRef.current;
       pendingRef.current = 0;
-      // Fire and forget — the loop-detection is that pendingRef is
-      // now zero, so any further clicks during THIS drain enqueue
-      // there and hit the next iteration.
       void flushDelta(next);
     }
   }
@@ -200,24 +195,24 @@ function SignedInClapButton({
     // Client-side cap check. The server cap is authoritative, but
     // stopping here saves a doomed POST and keeps the UX predictable
     // (button visibly refuses further clicks).
-    if (optimistic.viewerCount >= MAX_CLAPS_PER_VIEWER) return;
+    if (displayedViewerCount >= MAX_CLAPS_PER_VIEWER) return;
+
+    // Bump the optimistic overlay immediately — before any fetch
+    // begins. The overlay reduces back when the corresponding POST
+    // commits (see `flushDelta`).
+    setPendingDelta((p) => p + 1);
 
     if (inFlightRef.current) {
-      // Queue the click behind the in-flight POST — it'll drain as
-      // part of the response's follow-up.
+      // Queue this click behind the in-flight POST — it'll drain as
+      // part of that request's follow-up.
       pendingRef.current += 1;
-      startTransition(() => {
-        // Still show the optimistic bump so the count feels
-        // immediate even while queued.
-        addOptimistic(1);
-      });
       return;
     }
     void flushDelta(1);
   }
 
-  const atCap = optimistic.viewerCount >= MAX_CLAPS_PER_VIEWER;
-  const buttonLabel = `Clap for this article (${optimistic.viewerCount} / ${MAX_CLAPS_PER_VIEWER})`;
+  const atCap = displayedViewerCount >= MAX_CLAPS_PER_VIEWER;
+  const buttonLabel = `Clap for this article (${displayedViewerCount} / ${MAX_CLAPS_PER_VIEWER})`;
 
   return (
     <div className="flex flex-col gap-2">
@@ -237,11 +232,11 @@ function SignedInClapButton({
           }
         >
           <span aria-hidden="true">♥</span>
-          {optimistic.viewerCount === 0
+          {displayedViewerCount === 0
             ? "Clap"
-            : `Clapped (${optimistic.viewerCount})`}
+            : `Clapped (${displayedViewerCount})`}
         </button>
-        <ClapCount count={optimistic.totalCount} label="Total claps" />
+        <ClapCount count={displayedTotalCount} label="Total claps" />
       </div>
       {error && (
         <p role="alert" className="text-sm text-red-700">

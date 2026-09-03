@@ -30,6 +30,24 @@ export interface ViewerClapState {
 }
 
 /**
+ * Thrown when `addClaps` reaches the DB insert but the referenced
+ * article (or, less plausibly, user) has been deleted between the
+ * route's `resolveArticleForCaller` and this service call. Route
+ * handlers catch this and reply 404 — the same anti-enumeration
+ * shape they use when the slug never existed. Without a distinct
+ * type the underlying `P2003` (FK violation) would bubble out as a
+ * 500, which would leak "the row was there a millisecond ago" and
+ * confuse a monitoring alert about a cascade delete that is doing
+ * exactly what it should.
+ */
+export class ClapTargetMissingError extends Error {
+  constructor() {
+    super("clap target article or user no longer exists");
+    this.name = "ClapTargetMissingError";
+  }
+}
+
+/**
  * Result of `addClaps` — new counts after the write. `created` picks
  * 201 vs. 200 in the route (matches the follow route's convention);
  * `applied` is the actual delta the transaction wrote (may be less
@@ -142,10 +160,16 @@ export async function addClaps(
   });
 
   if (!existing) {
-    // Try to insert. If a concurrent request wins the composite-PK
-    // race the P2002 catch below reconciles by falling through to
-    // the increment path — same "loser must still see idempotent
-    // success" contract as `follow()`.
+    // Try to insert. Two known race outcomes to translate:
+    //   - P2002 (composite-PK conflict) — another writer beat us to
+    //     the create. Fall through to the increment path so the
+    //     caller still sees idempotent success. Same contract
+    //     `follow()` uses.
+    //   - P2003 (FK violation on articleId or userId) — the article
+    //     (or user) was deleted between the route's
+    //     `resolveArticleForCaller` and this insert. Translate to
+    //     ClapTargetMissingError so the route replies 404 rather
+    //     than leaking a 500.
     const initialDelta = Math.min(delta, MAX_CLAPS_PER_VIEWER);
     try {
       await db.clap.create({
@@ -159,14 +183,19 @@ export async function addClaps(
         totalCount,
       };
     } catch (err) {
-      if (
-        !(err instanceof Prisma.PrismaClientKnownRequestError) ||
-        err.code !== "P2002"
-      ) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        if (err.code === "P2003") {
+          throw new ClapTargetMissingError();
+        }
+        if (err.code === "P2002") {
+          // Fall through: another writer beat us to the create.
+          // Treat this call as an increment on the existing row.
+        } else {
+          throw err;
+        }
+      } else {
         throw err;
       }
-      // Fall through: another writer beat us to the create. Treat
-      // this call as an increment on the existing row.
     }
   }
 
@@ -176,35 +205,54 @@ export async function addClaps(
   // (losing the second delta) or both read `count = 49` and both
   // write `50` (making the total suddenly `99` when only two
   // claps were requested).
-  const applied = await db.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<Array<{ count: number }>>`
-      SELECT "count" FROM "Clap"
-      WHERE "userId" = ${userId} AND "articleId" = ${articleId}
-      FOR UPDATE
-    `;
-    const currentCount = rows.length > 0 ? rows[0]!.count : 0;
-    const nextCount = Math.min(currentCount + delta, MAX_CLAPS_PER_VIEWER);
-    const applied = nextCount - currentCount;
-    if (applied === 0) {
-      // Already at cap — nothing to write. Skipping the UPDATE keeps
-      // `updatedAt` stable so a "when did this viewer last engage"
-      // query later isn't confused by cap-hit no-ops.
-      return 0;
+  let applied: number;
+  try {
+    applied = await db.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ count: number }>>`
+        SELECT "count" FROM "Clap"
+        WHERE "userId" = ${userId} AND "articleId" = ${articleId}
+        FOR UPDATE
+      `;
+      const currentCount = rows.length > 0 ? rows[0]!.count : 0;
+      const nextCount = Math.min(currentCount + delta, MAX_CLAPS_PER_VIEWER);
+      const stepApplied = nextCount - currentCount;
+      if (stepApplied === 0) {
+        // Already at cap — nothing to write. Skipping the UPDATE
+        // keeps `updatedAt` stable so a "when did this viewer last
+        // engage" query later isn't confused by cap-hit no-ops.
+        return 0;
+      }
+      if (rows.length === 0) {
+        // Reached here via the P2002 catch above and the winning
+        // row has since been deleted (article-cascade race). Re-
+        // create; a further P2003 would mean the article itself is
+        // gone — caught below and surfaced as 404.
+        await tx.clap.create({
+          data: { userId, articleId, count: nextCount },
+        });
+      } else {
+        await tx.clap.update({
+          where: { userId_articleId: { userId, articleId } },
+          data: { count: nextCount },
+        });
+      }
+      return stepApplied;
+    });
+  } catch (err) {
+    // Article cascade-deleted mid-transaction → the re-create above
+    // trips P2003. Also handles the vanishingly-rare P2025 from a
+    // concurrent DELETE on the clap row we just SELECTed under
+    // FOR UPDATE (only possible if the DB was configured without
+    // proper row-locking, but the mapping is the same). Both mean
+    // "clap target no longer exists" → route replies 404.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      (err.code === "P2003" || err.code === "P2025")
+    ) {
+      throw new ClapTargetMissingError();
     }
-    if (rows.length === 0) {
-      // Reached here via the P2002 catch above and the winning row
-      // has since been deleted (article-cascade race). Re-create.
-      await tx.clap.create({
-        data: { userId, articleId, count: nextCount },
-      });
-    } else {
-      await tx.clap.update({
-        where: { userId_articleId: { userId, articleId } },
-        data: { count: nextCount },
-      });
-    }
-    return applied;
-  });
+    throw err;
+  }
 
   const [viewer, totalCount] = await Promise.all([
     db.clap.findUnique({

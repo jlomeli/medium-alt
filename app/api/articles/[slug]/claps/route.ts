@@ -25,7 +25,11 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
-import { addClaps, clearClaps } from "@/lib/claps/service";
+import {
+  addClaps,
+  clearClaps,
+  ClapTargetMissingError,
+} from "@/lib/claps/service";
 import { addClapsSchema } from "@/lib/validation/claps";
 
 /**
@@ -94,14 +98,26 @@ export async function POST(
     );
   }
 
-  const result = await addClaps(session.user.id, article.id, delta);
-  return NextResponse.json(
-    { viewerCount: result.viewerCount, totalCount: result.totalCount },
-    // 201 the first time a row lands, 200 on every subsequent write
-    // (including the cap-hit no-op). Same 201/200 convention as
-    // POST /follow.
-    { status: result.created ? 201 : 200 },
-  );
+  try {
+    const result = await addClaps(session.user.id, article.id, delta);
+    return NextResponse.json(
+      { viewerCount: result.viewerCount, totalCount: result.totalCount },
+      // 201 the first time a row lands, 200 on every subsequent write
+      // (including the cap-hit no-op). Same 201/200 convention as
+      // POST /follow.
+      { status: result.created ? 201 : 200 },
+    );
+  } catch (err) {
+    // Race: article (or user) was deleted between `resolveArticleForCaller`
+    // and the DB insert. Collapse to the same 404 an unknown slug would
+    // return — the caller can't distinguish "never existed" from "just
+    // got deleted" and neither should the response shape. Anything else
+    // rethrows to the framework's 500 handler.
+    if (err instanceof ClapTargetMissingError) {
+      return NextResponse.json({ error: "not-found" }, { status: 404 });
+    }
+    throw err;
+  }
 }
 
 export async function DELETE(

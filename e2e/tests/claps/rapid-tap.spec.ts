@@ -9,7 +9,7 @@ import { ArticleReadPage } from "@e2e/support/pom/article-read.page";
  */
 
 test.describe("@regression claps — optimistic UI", () => {
-  test("rapid clicks bump the total synchronously", async ({
+  test("rapid clicks bump the total synchronously (before the server responds)", async ({
     browser,
     baseURL,
     loggedInPage,
@@ -20,24 +20,78 @@ test.describe("@regression claps — optimistic UI", () => {
       published: true,
     });
 
+    // Hold the POST responses. Any impl that only bumps the visible
+    // count after the fetch resolves will fail the "count reads 10
+    // while POST is still in flight" assertion below — the whole
+    // reason this test earns its slot on the roadmap. A plain
+    // `toHaveText("10")` at the end of a sequence of clicks would
+    // auto-retry through the reconciliation and let that impl pass
+    // silently.
+    let releaseHeldPosts!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseHeldPosts = resolve;
+    });
+    let heldPosts = 0;
+    let completedPosts = 0;
+    let totalApplied = 0;
+    await loggedInPage.route(
+      `**/api/articles/${article.slug}/claps`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.continue();
+          return;
+        }
+        heldPosts += 1;
+        await gate;
+        const response = await route.fetch();
+        const body = (await response.json()) as {
+          viewerCount: number;
+          totalCount: number;
+        };
+        totalApplied = body.viewerCount;
+        completedPosts += 1;
+        await route.fulfill({ response });
+      },
+    );
+
     const read = new ArticleReadPage(loggedInPage);
     await read.gotoSlug(article.slug);
     await expect(read.clapTotal).toHaveText("0");
 
-    // Ten rapid clicks. The optimistic layer must render "10" before
-    // any of the network responses have landed — we assert the count
-    // via toHaveText (auto-retries) which lets the intermediate
-    // optimistic state satisfy the check without racing.
     for (let i = 0; i < 10; i++) {
       await read.clapButton.click();
     }
-    // Final reconciled state matches the tap count.
+
+    // Assert the optimistic state WHILE the POST is still pending.
+    // The client's batching queue collapses the 10 clicks into a
+    // small number of in-flight requests (typically 1–2), so a POST
+    // is guaranteed to be sitting at the gate at this point.
     await expect(read.clapTotal).toHaveText("10");
     await expect(read.clapButton).toHaveAccessibleName(/10\s*\/\s*50/);
+    expect(heldPosts).toBeGreaterThan(0);
+
+    // Release the held responses and let reconciliation land.
+    releaseHeldPosts();
+    // Post-reconciliation count still reads 10 — the server truth
+    // matches the optimistic value. The retry-until-idle here
+    // waits for the drain-queue's follow-up POST to settle so the
+    // reload below sees the final DB state.
+    await expect(read.clapTotal).toHaveText("10");
+    // Wait for the drain-queue POST to settle so the reload sees the
+    // final DB state — otherwise reload aborts the in-flight request
+    // and the DB only holds the first POST's 1 clap.
+    await expect
+      .poll(() => totalApplied, { timeout: 5000 })
+      .toBe(10);
+    await loggedInPage.unroute(`**/api/articles/${article.slug}/claps`);
 
     // Reload to prove the reconciliation matches the DB.
     await loggedInPage.reload();
     await expect(read.clapTotal).toHaveText("10");
+    // Sanity check: the batching queue really did collapse the 10
+    // clicks — we should see ~2 POSTs total (one initial + one drain),
+    // not 10.
+    expect(completedPosts).toBeLessThanOrEqual(3);
 
     await author.context.close();
   });
