@@ -313,7 +313,7 @@ model Comment {
   body      String   @db.Text
   createdAt DateTime @default(now())
 
-  @@index([articleId, createdAt])
+  @@index([articleId, createdAt, id])
   @@index([authorId])
 }
 ```
@@ -344,16 +344,20 @@ Migration: `pnpm db:migrate --name comments-add-comment-model`.
   invites a "why does the API expose two identical timestamps"
   question at review time.
 
-### Why the `@@index([articleId, createdAt])` composite index
+### Why the `@@index([articleId, createdAt, id])` composite index
 
 - The read path (list all comments for one article, ordered
   chronologically) is a single `WHERE articleId = ? ORDER BY
-  createdAt ASC, id ASC` — the composite index matches the
-  filter + sort order in one seek, no in-memory sort.
+  createdAt ASC, id ASC` — the three-column composite index
+  matches the filter + full sort order (including the `id`
+  tiebreak) in one seek, no in-memory sort even on rows sharing
+  a `createdAt` microsecond.
 - `id` is the tiebreak on `createdAt` (cuids are lexicographically
   sortable and monotonically increasing enough for a stable
-  order on the microsecond-collision case). Matches the
-  `publishedAt DESC, id DESC` tiebreak pattern the feed uses.
+  order on the microsecond-collision case). The index carries
+  `id` as its trailing column so the tiebreak is index-covered
+  — same reason the feed's index on `publishedAt DESC, id DESC`
+  carries `id`, not just `publishedAt`.
 
 ### Why `authorId` cascades
 
@@ -394,8 +398,22 @@ Response shapes:
   { username: string; name: string | null; image: string | null } }`.
   The `author` sub-shape mirrors the `PublicArticleSummary.author`
   shape from slice 4a — same fields, same nullability contract.
+  Deliberately does **not** carry `authorId` — an internal user
+  id is not part of the public API and would fingerprint accounts
+  across responses.
 - `commentCount` on `ArticleView` and `PublicArticleSummary`:
   `number` (nonnegative integer).
+
+Internally, `lib/comments/service.ts` also exposes a
+`CommentWithAuthorship = Comment & { authorId: string }` shape
+that the RSC on `/articles/[slug]` consumes directly (never
+crossing the API boundary). This is the shape `<CommentItem>` gets
+and the shape used for the `session.user.id === comment.authorId`
+ownership check that gates the delete affordance — a stable id
+comparison, not a username string compare that could false-match
+across a rename in a future slice. `GET /api/articles/{slug}/
+comments` projects `CommentWithAuthorship` down to the public
+`Comment` before serializing.
 
 ### Error shape
 
@@ -429,20 +447,23 @@ the API:
   addition — see below.
 - **No `viewer.hasCommented`** on either shape. Rationale: the
   presence of the viewer's own comment is already discoverable
-  from the comment list itself (the viewer's Delete affordance
-  is a client-side check `comment.author.username ===
-  session.user.username`), so a redundant aggregate would only
-  invite drift.
+  from the comment list itself (the RSC compares
+  `session.user.id === comment.authorId` on the internal
+  `CommentWithAuthorship` shape — see § Response shapes), so a
+  redundant aggregate would only invite drift.
 
 ## Read path — how counts + lists get on the responses
 
 Three reads, all centralised in `lib/comments/service.ts`:
 
-- `listCommentsForArticle(articleId: string): Promise<Comment[]>`
-  — single `findMany` with `orderBy: [{ createdAt: 'asc' }, { id:
-  'asc' }]` and an `include: { author: { select: publicAuthorSelect
-  } }`. Called by the RSC on `/articles/[slug]` and by
-  `GET /api/articles/{slug}/comments`.
+- `listCommentsForArticle(articleId: string):
+  Promise<CommentWithAuthorship[]>` — single `findMany` with
+  `orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]` and an
+  `include: { author: { select: publicAuthorSelect } }`. Returns
+  the internal `CommentWithAuthorship` shape (carries
+  `authorId`); called by the RSC on `/articles/[slug]` directly
+  and by `GET /api/articles/{slug}/comments`, which projects
+  each row down to the public `Comment` before serializing.
 - `countCommentsForArticles(articleIds: string[]): Promise<Map<string,
   number>>` — one `groupBy articleId, _count: { _all: true }` call
   shaped into a Map keyed by article id. Called from every listing
@@ -500,20 +521,54 @@ New components (`components/comments/`):
   is empty. Split from `<CommentsSection>` so the item mapping
   is testable in isolation and so a Phase-2 "load more" story
   can wrap it without touching the section shell.
-- `<CommentItem>` — server component. Renders one comment's
+- `<CommentItem>` — server component. Receives one
+  `CommentWithAuthorship` (the internal shape carrying
+  `authorId` — see § Response shapes) plus the current
+  `session.user.id` (or `null` when anonymous). Renders the
   card: author avatar + display name (linked to
   `/profiles/[username]`), relative timestamp, body (wrapped in
   a `<p className="whitespace-pre-wrap">` — plain text, no
-  markup interpretation). If `viewer.userId === comment.authorId`,
+  markup interpretation). Ownership gate is a stable-id compare
+  `session?.user.id === comment.authorId` (never a username
+  string compare — a username rename in a future slice would
+  silently strip the delete affordance). When the gate passes,
   renders a `<DeleteCommentButton>` child (client component).
 - `<CommentForm>` — client component,
   `<CommentForm slug={string} />`. Wraps a `<form action={…}>`
-  bound to a Next.js server action `postComment` that hits the
-  same POST endpoint under the hood (`useFormState` +
-  `useFormStatus` for the pending / error / cleared states). On
-  success: clears the textarea, calls `router.refresh()`,
-  returns focus to the textarea. On 400: surfaces the error
-  message in a `role="alert"` sibling of the textarea.
+  bound to a Next.js server action `postComment(slug, formData)`
+  exported from `app/articles/[slug]/actions.ts`. The action
+  runs server-side and does **not** make an internal HTTP call
+  to its own POST endpoint (that would need session-cookie
+  forwarding and a deployment-safe absolute URL, both of which
+  are Vercel-preview footguns). Instead it:
+  1. Reads the session via `auth()` from `lib/auth.ts`; a null
+     session throws a shaped error the client renders as
+     `role="alert"` (the anonymous DOM never renders
+     `<CommentForm>` in the first place, so this branch is
+     belt-and-braces — see § UI surface / `<CommentsSection>`).
+  2. Parses the `formData` body with `CreateCommentInput` from
+     `lib/validation/comment.ts`; a Zod failure returns
+     `{ error: { field: "body", code: "out-of-range" } }` in
+     the `useFormState` slot the client already renders.
+  3. Resolves the article via the shared
+     `resolveArticleForCaller` helper (same 404 rules as the
+     POST route — draft-not-owned-by-caller is 404, published
+     drafts are 404, unknown slug is 404).
+  4. Calls `createComment(authorId, articleId, body)` from
+     `lib/comments/service.ts` — the same service function the
+     POST route handler uses, so the two write paths cannot
+     drift.
+  5. `revalidatePath('/articles/' + slug)` on success so the
+     RSC re-renders the list with the new row.
+
+  The client wraps this action with `useFormState` +
+  `useFormStatus` for the pending / error / cleared states. On
+  success: clears the textarea via a `key` bump on the
+  `<textarea>`, returns focus to the textarea. On error:
+  surfaces the shaped error message in a `role="alert"` sibling
+  of the textarea. The POST route handler still exists (and
+  covers the same behavior — the API tests exercise it), but the
+  UI path is action → service, not UI → HTTP → service.
 - `<DeleteCommentButton>` — client component,
   `<DeleteCommentButton slug={string} commentId={string}
   postedAt={string} />`. Renders a `<button>` with accessible
@@ -551,9 +606,16 @@ that POSTs to `/api/articles/{slug}/comments`. A
 `commentFactory.delete(ownerApi, slug, id)` helper wraps the
 symmetric DELETE. No env-gated back door needed.
 
-For a "server error surfaces the inline alert" test, use
-Playwright's `page.route()` to fail the POST — no app-side seam
-required.
+The form path submits through a Next.js server action, not a
+client-side `fetch`, so `page.route()` cannot cleanly intercept
+the write to force a synthetic 500. That's fine — the shaped-
+error render path is already covered by the empty-body and
+too-long-body ACs (both drive the same `useFormState` error
+slot the client renders). A `page.route()` intercept on
+`DELETE /api/articles/{slug}/comments/{id}` remains available
+for the delete-error test if one lands in a future slice
+(`<DeleteCommentButton>` is a client component doing a
+same-origin fetch).
 
 ## Seed impact
 
