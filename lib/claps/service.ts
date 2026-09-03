@@ -118,6 +118,46 @@ export async function sumClapsForArticles(
 }
 
 /**
+ * Post-write reconciliation snapshot: the viewer's own count + the
+ * article's aggregate, read atomically under `RepeatableRead` so the
+ * two queries share a single DB snapshot. Returns `null` if the
+ * viewer row is gone — which under this isolation level unambiguously
+ * means the article was cascade-deleted at or before the snapshot
+ * (the caller translates that to `ClapTargetMissingError` → 404).
+ *
+ * Why the transaction: under Postgres's default `ReadCommitted` a
+ * concurrent article DELETE landing between the two reads could
+ * leave `viewer` non-null (snapshot taken before delete) while
+ * `total` reads 0 (snapshot taken after) — the route would then
+ * ship a contradiction (`{ viewerCount: N, totalCount: 0 }`).
+ * `RepeatableRead` pins both statements to one snapshot, so either
+ * both reflect the pre-delete state (consistent, return) or both
+ * reflect the post-delete state (viewer null, return null → 404).
+ */
+async function readClapReconciliation(
+  userId: string,
+  articleId: string,
+): Promise<{ viewerCount: number; totalCount: number } | null> {
+  return db.$transaction(
+    async (tx) => {
+      const [viewer, agg] = await Promise.all([
+        tx.clap.findUnique({
+          where: { userId_articleId: { userId, articleId } },
+          select: { count: true },
+        }),
+        tx.clap.aggregate({
+          where: { articleId },
+          _sum: { count: true },
+        }),
+      ]);
+      if (!viewer) return null;
+      return { viewerCount: viewer.count, totalCount: agg._sum.count ?? 0 };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
+}
+
+/**
  * Idempotent clap write. The composite `(userId, articleId)` primary
  * key gives us a natural upsert:
  *
@@ -193,31 +233,16 @@ export async function addClaps(
       }
     }
     if (createSucceeded) {
-      // Re-read the row we just wrote and the aggregate together.
-      // The null-check on `viewer` guards a narrow race: if the
-      // article is cascade-deleted between our create commit and
-      // this read, the clap row is gone and `sumClapsForArticle`
-      // returns 0. Without this check the route would ship a 201
-      // with `{ viewerCount: initialDelta, totalCount: 0 }` — a
-      // contradiction, and worse, a leak that the article existed
-      // moments ago. Instead surface the article's disappearance
-      // as the same 404 the caller would see if the slug had never
-      // existed.
-      const [viewer, totalCount] = await Promise.all([
-        db.clap.findUnique({
-          where: { userId_articleId: { userId, articleId } },
-          select: { count: true },
-        }),
-        sumClapsForArticle(articleId),
-      ]);
-      if (!viewer) {
-        throw new ClapTargetMissingError();
-      }
+      // Reconcile under a shared snapshot — see
+      // `readClapReconciliation` for why the naive parallel reads
+      // aren't enough on their own.
+      const snap = await readClapReconciliation(userId, articleId);
+      if (!snap) throw new ClapTargetMissingError();
       return {
         created: true,
         applied: initialDelta,
-        viewerCount: viewer.count,
-        totalCount,
+        viewerCount: snap.viewerCount,
+        totalCount: snap.totalCount,
       };
     }
   }
@@ -277,28 +302,15 @@ export async function addClaps(
     throw err;
   }
 
-  const [viewer, totalCount] = await Promise.all([
-    db.clap.findUnique({
-      where: { userId_articleId: { userId, articleId } },
-      select: { count: true },
-    }),
-    sumClapsForArticle(articleId),
-  ]);
-  // Same cascade-delete race guard as the first-clap path above: if
-  // the article vanished between the transaction commit and this
-  // read, the clap row is gone. Return 404 rather than a 200 with
-  // zeros — a caller can't distinguish "the article just got
-  // deleted" from "your write silently landed on nothing", and the
-  // anti-enumeration contract already says the correct answer is
-  // "does not exist".
-  if (!viewer) {
-    throw new ClapTargetMissingError();
-  }
+  // Reconcile under a shared snapshot — see `readClapReconciliation`
+  // for why the naive parallel reads aren't enough on their own.
+  const snap = await readClapReconciliation(userId, articleId);
+  if (!snap) throw new ClapTargetMissingError();
   return {
     created: false,
     applied,
-    viewerCount: viewer.count,
-    totalCount,
+    viewerCount: snap.viewerCount,
+    totalCount: snap.totalCount,
   };
 }
 
