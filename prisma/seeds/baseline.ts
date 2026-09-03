@@ -207,6 +207,7 @@ export type BaselineSummary = {
   tags: { created: number; skipped: number };
   follows: { created: number; skipped: number };
   claps: { created: number; skipped: number };
+  comments: { created: number; skipped: number };
 };
 
 /**
@@ -255,6 +256,37 @@ const BASELINE_CLAPS: readonly {
 ];
 
 /**
+ * Slice 8 — baseline comments. Bob's comment on Alice's welcome
+ * article gives every read-page and feed-card demo a non-zero
+ * comment count out of the box; Alice's reply on her own article
+ * demoes the self-comment story. Bob's row also gives him a
+ * comment he owns so the "delete your own comment" affordance is
+ * visible without a manual post round.
+ *
+ * Idempotency: `Comment` has no natural composite unique key (a
+ * user is free to post twice), so the seed dedupes on the
+ * content triple (articleSlug, authorEmail, body) via a
+ * `findFirst`. On second run the existing row is left untouched
+ * and reported as `skipped`.
+ */
+const BASELINE_COMMENTS: readonly {
+  authorEmail: string;
+  articleSlug: string;
+  body: string;
+}[] = [
+  {
+    authorEmail: "bob@medium-alt.test",
+    articleSlug: "alice-welcome-to-medium-alt",
+    body: "Great intro — looking forward to the next one!",
+  },
+  {
+    authorEmail: "alice@medium-alt.test",
+    articleSlug: "alice-welcome-to-medium-alt",
+    body: "Thanks Bob! Slice 2 lands next week.",
+  },
+];
+
+/**
  * Slice 5 — every unique tag slug referenced by a seeded article.
  * Derived from `USERS` at module load so `git diff` on a single tag
  * change touches exactly the article + this comment. Keys are slugs;
@@ -286,6 +318,7 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
     tags: { created: 0, skipped: 0 },
     follows: { created: 0, skipped: 0 },
     claps: { created: 0, skipped: 0 },
+    comments: { created: 0, skipped: 0 },
   };
 
   // Slice 5 — ensure every baseline tag exists BEFORE the article loop
@@ -464,6 +497,58 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
         },
       });
       summary.claps.created += 1;
+    }
+  }
+
+  // Slice 8 — baseline comments. Resolve author by email + article
+  // by slug (both stable identities). `Comment` has no composite
+  // unique key, so dedupe on the content triple via `findFirst` —
+  // second run leaves the row untouched and reports `skipped`.
+  for (const edge of BASELINE_COMMENTS) {
+    const [author, article] = await Promise.all([
+      db.user.findUnique({
+        where: { email: edge.authorEmail },
+        select: { id: true },
+      }),
+      db.article.findUnique({
+        where: { slug: edge.articleSlug },
+        select: { id: true, published: true },
+      }),
+    ]);
+    if (!author || !article) {
+      // Loud error matches the follows/claps branches — a missing
+      // endpoint means USERS / *_ARTICLES was edited without
+      // updating BASELINE_COMMENTS.
+      throw new Error(
+        `Baseline comment by ${edge.authorEmail} on ${edge.articleSlug} references a user/article that isn't in the baseline`,
+      );
+    }
+    if (!article.published) {
+      // Comments on drafts are rejected by the API; the seed is not
+      // a back door.
+      throw new Error(
+        `Baseline comment by ${edge.authorEmail} on ${edge.articleSlug} targets an unpublished article`,
+      );
+    }
+    const existing = await db.comment.findFirst({
+      where: {
+        articleId: article.id,
+        authorId: author.id,
+        body: edge.body,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      summary.comments.skipped += 1;
+    } else {
+      await db.comment.create({
+        data: {
+          articleId: article.id,
+          authorId: author.id,
+          body: edge.body,
+        },
+      });
+      summary.comments.created += 1;
     }
   }
 

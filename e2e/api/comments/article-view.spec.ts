@@ -22,11 +22,15 @@ test.describe("@smoke @api ArticleView carries commentCount", () => {
       published: true,
     });
 
-    // Empty to start — value present, is a number.
+    // Empty to start — value present, is a number. The single-article
+    // endpoint wraps its payload as `{ article: {...} }` (matches
+    // every other article-view test in the suite).
     const empty = await api.get(`/api/articles/${article.slug}`);
     expect(empty.status()).toBe(200);
-    const emptyBody = (await empty.json()) as { commentCount: number };
-    expect(emptyBody.commentCount).toBe(0);
+    const emptyBody = (await empty.json()) as {
+      article: { commentCount: number };
+    };
+    expect(emptyBody.article.commentCount).toBe(0);
 
     await commentFactory.create(reader.api, article.slug, "one");
     await commentFactory.create(reader.api, article.slug, "two");
@@ -34,13 +38,13 @@ test.describe("@smoke @api ArticleView carries commentCount", () => {
 
     const withCommentsRes = await api.get(`/api/articles/${article.slug}`);
     const withComments = (await withCommentsRes.json()) as {
-      commentCount: number;
+      article: { commentCount: number };
     };
-    expect(withComments.commentCount).toBe(3);
+    expect(withComments.article.commentCount).toBe(3);
 
     const listRes = await api.get(`/api/articles/${article.slug}/comments`);
     const list = (await listRes.json()) as { items: unknown[] };
-    expect(withComments.commentCount).toBe(list.items.length);
+    expect(withComments.article.commentCount).toBe(list.items.length);
 
     await author.context.close();
     await reader.context.close();
@@ -56,8 +60,8 @@ test.describe("@smoke @api ArticleView carries commentCount", () => {
 
     const res = await author.api.get(`/api/articles/${draft.slug}`);
     expect(res.status()).toBe(200);
-    const body = (await res.json()) as { commentCount: number };
-    expect(body.commentCount).toBe(0);
+    const body = (await res.json()) as { article: { commentCount: number } };
+    expect(body.article.commentCount).toBe(0);
 
     await author.context.close();
   });

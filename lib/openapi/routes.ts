@@ -24,6 +24,7 @@ import {
   updateArticleSchema,
 } from "@/lib/validation/article";
 import { addClapsSchema } from "@/lib/validation/claps";
+import { createCommentSchema } from "@/lib/validation/comment";
 
 // Response shapes as Zod so the OpenAPI generator can turn them into JSON
 // Schemas without a second declaration.
@@ -166,6 +167,11 @@ const publicProfileSchema = z.object({
 
 const unauthenticatedSchema = z.object({ error: z.literal("unauthenticated") });
 const notFoundSchema = z.object({ error: z.literal("not-found") });
+// Slice 8 — first appearance of 403 in the API. Comments' delete
+// endpoint returns it for the non-owner case; the comment id is
+// publicly readable via GET so 403 leaks nothing new (see
+// docs/specs/comments.md § Error shape).
+const forbiddenSchema = z.object({ error: z.literal("forbidden") });
 
 registerRoute({
   method: "get",
@@ -267,6 +273,9 @@ const articleViewSchema = z.object({
   // Slice 7 — aggregate + optional per-viewer clap state. See
   // docs/specs/claps.md § API contract.
   clapCount: z.number().int().nonnegative(),
+  // Slice 8 — aggregate comment count. Unconditional, present on
+  // every ArticleView (0 for drafts and never-commented articles).
+  commentCount: z.number().int().nonnegative(),
   viewer: viewerClapSchema.optional(),
 });
 
@@ -287,6 +296,9 @@ const publicArticleSummarySchema = z.object({
   // this shape (read-page-only affordance); see docs/specs/claps.md §
   // API contract.
   clapCount: z.number().int().nonnegative(),
+  // Slice 8 — aggregate comment count on every card. Same "no viewer
+  // block on summaries" discipline as `clapCount`.
+  commentCount: z.number().int().nonnegative(),
 });
 
 const feedResponseSchema = z.object({
@@ -623,6 +635,91 @@ registerRoute({
     "401": { description: "No session cookie.", schema: unauthenticatedSchema },
     "404": {
       description: "No such article, or a draft the caller doesn't own.",
+      schema: notFoundSchema,
+    },
+  },
+});
+
+// -------- Comments (docs/specs/comments.md § API surface) --------
+
+const commentAuthorSchema = z.object({
+  username: z.string().nullable(),
+  name: z.string().nullable(),
+  image: z.string().nullable(),
+});
+const commentSchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  createdAt: z.string().datetime(),
+  author: commentAuthorSchema,
+});
+const commentsListSchema = z.object({ items: z.array(commentSchema) });
+
+registerRoute({
+  method: "get",
+  path: "/api/articles/{slug}/comments",
+  summary: "List comments on an article, oldest first.",
+  description:
+    "Public for published articles. Draft visibility: an unknown slug " +
+    "or a draft the caller doesn't own → 404 (same anti-enumeration " +
+    "shape). The author asking for comments on their own draft → 200 " +
+    "with an empty list (the write path rejects posts to drafts).",
+  tags: ["comments"],
+  responses: {
+    "200": { description: "Comments, oldest first.", schema: commentsListSchema },
+    "404": {
+      description: "No such article, or a draft the caller doesn't own.",
+      schema: notFoundSchema,
+    },
+  },
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/articles/{slug}/comments",
+  summary: "Post a comment on a published article.",
+  description:
+    "Signed-in only. Body is plain text, 1..2000 chars after trim. " +
+    "Drafts (including the caller's own drafts — self-comment on a " +
+    "draft is meaningless) return 404, matching the read side.",
+  tags: ["comments"],
+  request: createCommentSchema,
+  responses: {
+    "201": { description: "Comment created.", schema: commentSchema },
+    "400": {
+      description: "Body empty / whitespace / too long.",
+      schema: fieldErrorSchema,
+    },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "404": {
+      description:
+        "No such article, or a draft (including the caller's own draft).",
+      schema: notFoundSchema,
+    },
+  },
+});
+
+registerRoute({
+  method: "delete",
+  path: "/api/articles/{slug}/comments/{commentId}",
+  summary: "Delete one of your own comments.",
+  description:
+    "Signed-in, comment-author only. Article-author moderation is out " +
+    "of scope for v1 — even the article's author gets 403 on someone " +
+    "else's comment. 403 is honest here (rather than 404-for-privacy): " +
+    "the comment id is publicly readable via GET, so 403 leaks nothing " +
+    "new. Wrong (slug, commentId) pairing → 404.",
+  tags: ["comments"],
+  responses: {
+    "204": { description: "Comment deleted." },
+    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "403": {
+      description: "Caller is not the author of the comment.",
+      schema: forbiddenSchema,
+    },
+    "404": {
+      description:
+        "Unknown comment id, or the id doesn't belong to the given article.",
       schema: notFoundSchema,
     },
   },

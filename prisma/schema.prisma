@@ -45,6 +45,11 @@ model User {
   // surface in v1; the composite PK on Clap is enough for both the
   // read paths (viewer-state lookup, article aggregate).
   claps               Clap[]
+  // Comments — see docs/specs/comments.md. Both incoming
+  // (comments they authored) and outgoing directions are cascades
+  // — a deleted user's comments vanish alongside their articles
+  // and claps.
+  comments            Comment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -111,6 +116,8 @@ model Article {
   tags          Tag[]
   // Claps — see docs/specs/claps.md.
   claps         Clap[]
+  // Comments — see docs/specs/comments.md.
+  comments      Comment[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -201,6 +208,34 @@ model Clap {
 
   @@id([userId, articleId])
   @@index([articleId])
+}
+
+// Comments — see docs/specs/comments.md.
+//
+// v1 is plain text (§ Non-goals — no rich text). `body` is `String @db.Text`
+// (Postgres TEXT), uncapped at the DB level; the 2000-char cap is
+// enforced in the Zod schema (`lib/validation/comment.ts`) so a
+// confused client gets a shaped 400 instead of a Postgres error. No
+// `updatedAt` field — comments are immutable in v1 (§ Non-goals).
+//
+// Composite index `[articleId, createdAt, id]` matches the read
+// path's `WHERE articleId = ? ORDER BY createdAt ASC, id ASC` in one
+// seek including the tiebreak — same shape the feed's
+// `[published, publishedAt, id]` index takes for the same reason.
+//
+// Cascade in both directions so a deleted user's or a deleted
+// article's comments vanish cleanly.
+model Comment {
+  id        String   @id @default(cuid())
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([articleId, createdAt, id])
+  @@index([authorId])
 }
 
 // Password-reset flow — see docs/specs/auth.md. `tokenHash` is sha256(raw);

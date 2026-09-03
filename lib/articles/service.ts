@@ -13,6 +13,7 @@
 import { db } from "@/lib/db";
 import { encodeCursor, type FeedCursor } from "@/lib/validation/feed";
 import { sumClapsForArticles } from "@/lib/claps/service";
+import { countCommentsForArticles } from "@/lib/comments/service";
 
 /**
  * Narrow "index card" shape for public article listings. Deliberately
@@ -34,6 +35,12 @@ import { sumClapsForArticles } from "@/lib/claps/service";
  *     `viewer.clapCount` lives on `ArticleView` alone; adding it here
  *     would be per-card materialisation with zero read paths in v1
  *     (see docs/specs/claps.md § API contract).
+ *
+ * Slice 8 addition:
+ *   - `commentCount` — aggregate `COUNT(*)` on Comment for the
+ *     article, batched via `countCommentsForArticles` (one groupBy
+ *     per listing, mirroring the `clapCount` fanout). Same
+ *     no-viewer-block discipline as `clapCount`.
  */
 export interface PublicArticleSummary {
   slug: string;
@@ -46,6 +53,7 @@ export interface PublicArticleSummary {
     name: string | null;
   };
   clapCount: number;
+  commentCount: number;
 }
 
 /**
@@ -90,7 +98,11 @@ type RawArticleRow = {
 };
 
 /** Flatten the Prisma tag join into the sorted string array the API returns. */
-function shapeSummary(row: RawArticleRow, clapCount: number): PublicArticleSummary {
+function shapeSummary(
+  row: RawArticleRow,
+  clapCount: number,
+  commentCount: number,
+): PublicArticleSummary {
   return {
     slug: row.slug,
     title: row.title,
@@ -101,21 +113,33 @@ function shapeSummary(row: RawArticleRow, clapCount: number): PublicArticleSumma
     tags: row.tags.map((t) => t.slug).sort(),
     author: row.author,
     clapCount,
+    commentCount,
   };
 }
 
 /**
- * Enrich a batch of raw rows with their clap aggregates in one
- * additional round-trip (via `sumClapsForArticles.groupBy`). Kept
+ * Enrich a batch of raw rows with their clap + comment aggregates in
+ * two additional round-trips (via `sumClapsForArticles.groupBy` and
+ * `countCommentsForArticles.groupBy`), fired in parallel. Kept
  * separate from `shapeSummary` so callers with a single row can skip
- * the batch call and use `sumClapsForArticle` directly if they prefer.
+ * the batch calls and hit the singular aggregate helpers directly.
  */
 async function enrichSummaries(
   rows: RawArticleRow[],
 ): Promise<PublicArticleSummary[]> {
   if (rows.length === 0) return [];
-  const clapMap = await sumClapsForArticles(rows.map((r) => r.id));
-  return rows.map((row) => shapeSummary(row, clapMap.get(row.id) ?? 0));
+  const ids = rows.map((r) => r.id);
+  const [clapMap, commentMap] = await Promise.all([
+    sumClapsForArticles(ids),
+    countCommentsForArticles(ids),
+  ]);
+  return rows.map((row) =>
+    shapeSummary(
+      row,
+      clapMap.get(row.id) ?? 0,
+      commentMap.get(row.id) ?? 0,
+    ),
+  );
 }
 
 /**
