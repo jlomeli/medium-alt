@@ -395,12 +395,15 @@ Zod schemas live under `lib/validation/comment.ts`:
 Response shapes:
 
 - `Comment = { id: string; body: string; createdAt: string; author:
-  { username: string; name: string | null; image: string | null } }`.
-  The `author` sub-shape mirrors the `PublicArticleSummary.author`
-  shape from slice 4a — same fields, same nullability contract.
-  Deliberately does **not** carry `authorId` — an internal user
-  id is not part of the public API and would fingerprint accounts
-  across responses.
+  { username: string | null; name: string | null; image: string
+  | null } }`. Nullability tracks the `User` model
+  (`username`, `name`, and `image` are each `String?` in
+  `prisma/schema.prisma`), matching the same-typed
+  `PublicArticleSummary.author` contract from slice 4a; the
+  extra `image` field is a superset — feed cards don't need an
+  avatar, comment cards do. Deliberately does **not** carry
+  `authorId` — an internal user id is not part of the public
+  API and would fingerprint accounts across responses.
 - `commentCount` on `ArticleView` and `PublicArticleSummary`:
   `number` (nonnegative integer).
 
@@ -487,15 +490,35 @@ Comment writes are single-row inserts / deletes — no arithmetic,
 no race, no `FOR UPDATE`. The service wraps them for testability
 but doesn't need a transaction:
 
-- `createComment(authorId, articleId, body): Promise<Comment>` —
-  single `create`. The 400 for empty/too-long body is Zod's job
+- `createComment(authorId, articleId, body):
+  Promise<CommentWithAuthorship>` — one `prisma.comment.create({
+  data: { authorId, articleId, body }, include: { author: {
+  select: publicAuthorSelect } } })`. Returns the internal
+  `CommentWithAuthorship` shape (see § Response shapes): the row
+  columns plus the nested `author` sub-object, ready for the RSC
+  or ready to be projected down to the public `Comment` by the
+  POST route before serializing. The default `create` (without
+  the `include`) would return `{ id, body, createdAt, authorId,
+  articleId }` — flat row columns, no nested `author` — which
+  is the wrong shape for both callers and would leak the
+  internal `articleId` scalar; the explicit `include` +
+  down-projection at the HTTP boundary is what keeps the wire
+  shape honest. The 400 for empty/too-long body is Zod's job
   upstream; the "no comments on drafts (even own)" 404 is the
   caller's job (see § UI surface / `<CommentForm>` step 4 for
   the server action, and the same check on the POST route
   handler). The service assumes the article has already been
   resolved *and* verified `publishedAt != null`, and lets Prisma
-  surface any DB-level violation (there is none — the column
-  is `Text`).
+  surface any DB-level violation (there is none — the column is
+  `Text`).
+
+`publicAuthorSelect` is a new local constant in
+`lib/comments/service.ts` — a Prisma `select` object of
+`{ username: true, name: true, image: true }` matching the
+`Comment.author` sub-shape. Not shared with `lib/articles/`
+service (which projects a narrower `{ username, name }` inline
+for its own listing shape); prematurely hoisting a shared
+projection would couple two independently-evolving read paths.
 - `deleteComment(commentId, callerId): Promise<void>` — a
   `findUniqueOrThrow` on the id (surfaces to 404 at the route),
   then an authorship check (surfaces to 403), then a `delete`.
@@ -538,22 +561,61 @@ New components (`components/comments/`):
   silently strip the delete affordance). When the gate passes,
   renders a `<DeleteCommentButton>` child (client component).
 - `<CommentForm>` — client component,
-  `<CommentForm slug={string} />`. Wraps a `<form action={…}>`
-  bound to a Next.js server action `postComment(slug, formData)`
-  exported from `app/articles/[slug]/actions.ts`. The action
-  runs server-side and does **not** make an internal HTTP call
-  to its own POST endpoint (that would need session-cookie
-  forwarding and a deployment-safe absolute URL, both of which
-  are Vercel-preview footguns). Instead it:
-  1. Reads the session via `auth()` from `lib/auth.ts`; a null
-     session throws a shaped error the client renders as
-     `role="alert"` (the anonymous DOM never renders
-     `<CommentForm>` in the first place, so this branch is
-     belt-and-braces — see § UI surface / `<CommentsSection>`).
-  2. Parses the `formData` body with `CreateCommentInput` from
-     `lib/validation/comment.ts`; a Zod failure returns
-     `{ error: { field: "body", code: "out-of-range" } }` in
-     the `useFormState` slot the client already renders.
+  `<CommentForm slug={string} />`. Wraps a `<form
+  action={boundAction}>` where `boundAction` is
+  `postComment.bind(null, slug)` — the `slug` is captured into
+  the action's closure at the render site so it does not have
+  to travel through `formData` and cannot be forged by a client
+  editing the DOM. `postComment` itself is a server action
+  exported from `app/articles/[slug]/actions.ts` with the
+  signature required by React 19's `useActionState`:
+
+  ```ts
+  type PostCommentState =
+    | { status: "idle" }
+    | { status: "success"; submittedAt: number }
+    | { status: "error"; error: {
+        field: "body" | "slug";
+        code: "out-of-range" | "not-found"
+          | "unauthenticated";
+        message?: string;
+      } };
+
+  async function postComment(
+    slug: string,
+    _prevState: PostCommentState,
+    formData: FormData,
+  ): Promise<PostCommentState>;
+  ```
+
+  With `postComment.bind(null, slug)` the framework-supplied
+  arguments (`prevState`, `formData`) line up in the second and
+  third positions — the order `useActionState` guarantees. A
+  fresh `submittedAt` timestamp on the success state gives the
+  client a stable value to `key` the `<textarea>` off, which is
+  how the field is cleared without an imperative `ref.reset()`
+  (a state-derived reset survives React's concurrent-render
+  reordering).
+
+  The action runs server-side and does **not** make an internal
+  HTTP call to its own POST endpoint (that would need
+  session-cookie forwarding and a deployment-safe absolute URL,
+  both Vercel-preview footguns). Instead it:
+  1. Reads the session via `auth()` imported from
+     `@/lib/auth/config` — the canonical auth module used by
+     every other RSC and route handler in the repo (`app/page.tsx`,
+     `app/articles/[slug]/page.tsx`,
+     `app/api/articles/[slug]/claps/route.ts`, etc.). A null
+     session returns `{ status: "error", error: { field: "body",
+     code: "unauthenticated" } }` (the anonymous DOM never
+     renders `<CommentForm>` in the first place, so this branch
+     is belt-and-braces — see § UI surface /
+     `<CommentsSection>`).
+  2. Parses the `formData.get("body")` payload with
+     `CreateCommentInput` from `lib/validation/comment.ts`; a
+     Zod failure returns `{ status: "error", error: { field:
+     "body", code: "out-of-range" } }` — the client renders the
+     `error.message` in its `role="alert"` slot.
   3. Resolves the article via the shared
      `resolveArticleForCaller` helper (unknown slug → 404;
      draft not owned by the caller → 404). Note the helper
@@ -561,26 +623,37 @@ New components (`components/comments/`):
      draft path work — so it alone is **not** sufficient here.
   4. Rejects a resolved draft with a shaped 404 error even when
      the caller owns it (`article.publishedAt == null` →
-     `{ error: "not-found" }`). This matches the POST route
-     contract that all drafts, including own drafts, return
-     404 — an unpublished article has no reader audience for a
-     comment. The POST route handler applies the same check
-     against the same helper for the same reason, so the two
-     write paths cannot drift.
+     `{ status: "error", error: { field: "slug", code:
+     "not-found" } }`). This matches the POST route contract
+     that all drafts, including own drafts, return 404 — an
+     unpublished article has no reader audience for a comment.
+     The POST route handler applies the same check against the
+     same helper for the same reason, so the two write paths
+     cannot drift.
   5. Calls `createComment(authorId, articleId, body)` from
      `lib/comments/service.ts` — the same service function the
      POST route handler uses.
-  6. `revalidatePath('/articles/' + slug)` on success so the
-     RSC re-renders the list with the new row.
+  6. `revalidatePath('/articles/' + slug)` on success so the RSC
+     re-renders the list with the new row.
+  7. Returns `{ status: "success", submittedAt: Date.now() }`.
 
-  The client wraps this action with `useFormState` +
-  `useFormStatus` for the pending / error / cleared states. On
-  success: clears the textarea via a `key` bump on the
-  `<textarea>`, returns focus to the textarea. On error:
-  surfaces the shaped error message in a `role="alert"` sibling
-  of the textarea. The POST route handler still exists (and
-  covers the same behavior — the API tests exercise it), but the
-  UI path is action → service, not UI → HTTP → service.
+  The client wraps this action with `useActionState` (React 19;
+  the older `useFormState` name is a compatibility alias) and
+  `useFormStatus` for the pending / error / cleared states.
+  Renders:
+  - the `<textarea>` with `key={state.status === "success" ?
+    state.submittedAt : "draft"}` — a new `key` on success
+    remounts the field to an empty value, and a `useEffect` on
+    the same `submittedAt` calls `textareaRef.current?.focus()`;
+  - a `role="alert"` sibling that renders the shaped
+    `state.error.message` (or a code-to-copy lookup) when
+    `state.status === "error"`;
+  - the submit button labeled `"Post comment"`, disabled while
+    `useFormStatus().pending`.
+
+  The POST route handler still exists (and covers the same
+  behavior — the API tests exercise it), but the UI path is
+  action → service, not UI → HTTP → service.
 - `<DeleteCommentButton>` — client component,
   `<DeleteCommentButton slug={string} commentId={string}
   postedAt={string} />`. Renders a `<button>` with accessible
