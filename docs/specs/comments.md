@@ -508,7 +508,10 @@ but doesn't need a transaction:
   caller's job (see § UI surface / `<CommentForm>` step 4 for
   the server action, and the same check on the POST route
   handler). The service assumes the article has already been
-  resolved *and* verified `publishedAt != null`, and lets Prisma
+  resolved *and* verified `published === true` (the shared
+  `resolveArticleForCaller` widens its return type in this slice
+  to carry the boolean — see § UI surface / `<CommentForm>`
+  step 3), and lets Prisma
   surface any DB-level violation (there is none — the column is
   `Text`).
 
@@ -616,13 +619,28 @@ New components (`components/comments/`):
      Zod failure returns `{ status: "error", error: { field:
      "body", code: "out-of-range" } }` — the client renders the
      `error.message` in its `role="alert"` slot.
-  3. Resolves the article via the shared
-     `resolveArticleForCaller` helper (unknown slug → 404;
-     draft not owned by the caller → 404). Note the helper
+  3. Resolves the article via `resolveArticleForCaller`
+     (unknown slug → 404; draft not owned by the caller → 404).
+     Today this helper is route-local to
+     `app/api/articles/[slug]/claps/route.ts` and returns only
+     `{ id, authorId }` — the `published` boolean it reads for
+     its own draft-privacy check is discarded before returning.
+     That's fine for claps (self-clap on an own draft is a
+     separate 400 the route rejects up front), but it's *not*
+     enough for comments: an owned draft would slip past the
+     privacy filter without a subsequent `published` check, and
+     the return type doesn't even carry the field. **Part of
+     slice 8 is hoisting the helper** into a shared
+     `lib/articles/access.ts` module and widening its return to
+     `{ id: string; authorId: string; published: boolean }`, so
+     both the claps route and the comments write paths call one
+     implementation. Slice 7's route handler is updated in the
+     same PR to import from the new module (behavior unchanged —
+     it just ignores the extra field). Note the helper still
      *returns* an owned draft — that's what makes the edit-my-
      draft path work — so it alone is **not** sufficient here.
   4. Rejects a resolved draft with a shaped 404 error even when
-     the caller owns it (`article.publishedAt == null` →
+     the caller owns it (`article.published === false` →
      `{ status: "error", error: { field: "slug", code:
      "not-found" } }`). This matches the POST route contract
      that all drafts, including own drafts, return 404 — an
