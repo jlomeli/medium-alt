@@ -206,6 +206,7 @@ export type BaselineSummary = {
   articles: { created: number; skipped: number };
   tags: { created: number; skipped: number };
   follows: { created: number; skipped: number };
+  claps: { created: number; skipped: number };
 };
 
 /**
@@ -224,6 +225,33 @@ const BASELINE_FOLLOWS: readonly {
   followingEmail: string;
 }[] = [
   { followerEmail: "bob@medium-alt.test", followingEmail: "alice@medium-alt.test" },
+];
+
+/**
+ * Slice 7 — baseline claps. Bob claps 5× for Alice's welcome article
+ * so a fresh `pnpm db:seed` gives:
+ *   - Alice's article read view shows a non-zero total-clap count.
+ *   - Logged in as Bob → the same read view shows `Clapped (5)`,
+ *     demoing the "reload preserves state" story without any manual
+ *     click round.
+ *   - The Global feed card for that article shows a non-zero clap
+ *     glyph, demoing the "counts on cards" story without publishing
+ *     new articles.
+ * Keyed by (reader email, article slug) so the source text is legible
+ * without cross-referencing the article block. `count` is set
+ * directly (not looped through the POST endpoint) — seeds set state,
+ * they don't drive UI. Same idempotency shape as follows.
+ */
+const BASELINE_CLAPS: readonly {
+  readerEmail: string;
+  articleSlug: string;
+  count: number;
+}[] = [
+  {
+    readerEmail: "bob@medium-alt.test",
+    articleSlug: "alice-welcome-to-medium-alt",
+    count: 5,
+  },
 ];
 
 /**
@@ -257,6 +285,7 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
     articles: { created: 0, skipped: 0 },
     tags: { created: 0, skipped: 0 },
     follows: { created: 0, skipped: 0 },
+    claps: { created: 0, skipped: 0 },
   };
 
   // Slice 5 — ensure every baseline tag exists BEFORE the article loop
@@ -385,6 +414,56 @@ export async function seedBaseline(db: PrismaClient): Promise<BaselineSummary> {
         data: { followerId: follower.id, followingId: following.id },
       });
       summary.follows.created += 1;
+    }
+  }
+
+  // Slice 7 — baseline claps. Resolve reader by email + article by
+  // slug (both stable identities). findUnique + create on the
+  // composite `@@id([userId, articleId])` matches the follow-branch
+  // idempotency; on second run the existing row is left untouched
+  // and the counter reports it as `skipped`. `count` is set
+  // directly (not looped via the POST endpoint) — seeds set state,
+  // they don't drive UI.
+  for (const edge of BASELINE_CLAPS) {
+    const [reader, article] = await Promise.all([
+      db.user.findUnique({
+        where: { email: edge.readerEmail },
+        select: { id: true },
+      }),
+      db.article.findUnique({
+        where: { slug: edge.articleSlug },
+        select: { id: true, authorId: true },
+      }),
+    ]);
+    if (!reader || !article) {
+      // A missing endpoint means USERS / ALICE_ARTICLES / BOB_ARTICLES
+      // was edited without updating BASELINE_CLAPS — loud error beats
+      // a silently-skipped clap.
+      throw new Error(
+        `Baseline clap by ${edge.readerEmail} on ${edge.articleSlug} references a user/article that isn't in the baseline`,
+      );
+    }
+    if (reader.id === article.authorId) {
+      // Self-clap is rejected by the API; the seed is not a back door.
+      throw new Error(
+        `Baseline clap by ${edge.readerEmail} on ${edge.articleSlug} is a self-clap — the reader authored the article`,
+      );
+    }
+    const existing = await db.clap.findUnique({
+      where: { userId_articleId: { userId: reader.id, articleId: article.id } },
+      select: { userId: true },
+    });
+    if (existing) {
+      summary.claps.skipped += 1;
+    } else {
+      await db.clap.create({
+        data: {
+          userId: reader.id,
+          articleId: article.id,
+          count: edge.count,
+        },
+      });
+      summary.claps.created += 1;
     }
   }
 

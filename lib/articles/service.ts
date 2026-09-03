@@ -12,6 +12,7 @@
  */
 import { db } from "@/lib/db";
 import { encodeCursor, type FeedCursor } from "@/lib/validation/feed";
+import { sumClapsForArticles } from "@/lib/claps/service";
 
 /**
  * Narrow "index card" shape for public article listings. Deliberately
@@ -24,6 +25,15 @@ import { encodeCursor, type FeedCursor } from "@/lib/validation/feed";
  *   - `author` — `{ username, name }`. The global feed needs it to
  *     render an author byline on each card; the existing per-user
  *     endpoint also gains it (additive, no client breaks).
+ *
+ * Slice 7 addition:
+ *   - `clapCount` — aggregate `SUM(count)` across every reader. Read
+ *     path is a single `groupBy` in `sumClapsForArticles`, joined
+ *     into the summary list at shape time. No `viewer` block on this
+ *     shape — the read-page-only `viewer.hasClapped` /
+ *     `viewer.clapCount` lives on `ArticleView` alone; adding it here
+ *     would be per-card materialisation with zero read paths in v1
+ *     (see docs/specs/claps.md § API contract).
  */
 export interface PublicArticleSummary {
   slug: string;
@@ -35,6 +45,7 @@ export interface PublicArticleSummary {
     username: string | null;
     name: string | null;
   };
+  clapCount: number;
 }
 
 /**
@@ -52,8 +63,14 @@ export interface PopularTag {
  * Prisma `select` matching `PublicArticleSummary`. Shared by every
  * listing query so a shape change here (adding a field, dropping one)
  * flags every call site in review at once.
+ *
+ * Slice 7 — every listing that produces `PublicArticleSummary` also
+ * selects `id` so the clap-count enrichment can key by it without a
+ * second round-trip. `id` is dropped in `shapeSummary` — it's not on
+ * the public shape.
  */
 const publicArticleSummarySelect = {
+  id: true,
   slug: true,
   title: true,
   subtitle: true,
@@ -63,6 +80,7 @@ const publicArticleSummarySelect = {
 } as const;
 
 type RawArticleRow = {
+  id: string;
   slug: string;
   title: string;
   subtitle: string | null;
@@ -72,7 +90,7 @@ type RawArticleRow = {
 };
 
 /** Flatten the Prisma tag join into the sorted string array the API returns. */
-function shapeSummary(row: RawArticleRow): PublicArticleSummary {
+function shapeSummary(row: RawArticleRow, clapCount: number): PublicArticleSummary {
   return {
     slug: row.slug,
     title: row.title,
@@ -82,7 +100,22 @@ function shapeSummary(row: RawArticleRow): PublicArticleSummary {
     // cleanly. The DB doesn't guarantee ordering across the many-to-many.
     tags: row.tags.map((t) => t.slug).sort(),
     author: row.author,
+    clapCount,
   };
+}
+
+/**
+ * Enrich a batch of raw rows with their clap aggregates in one
+ * additional round-trip (via `sumClapsForArticles.groupBy`). Kept
+ * separate from `shapeSummary` so callers with a single row can skip
+ * the batch call and use `sumClapsForArticle` directly if they prefer.
+ */
+async function enrichSummaries(
+  rows: RawArticleRow[],
+): Promise<PublicArticleSummary[]> {
+  if (rows.length === 0) return [];
+  const clapMap = await sumClapsForArticles(rows.map((r) => r.id));
+  return rows.map((row) => shapeSummary(row, clapMap.get(row.id) ?? 0));
 }
 
 /**
@@ -105,7 +138,7 @@ export async function listPublishedArticlesByUsername(
     orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
     select: publicArticleSummarySelect,
   });
-  return rows.map(shapeSummary);
+  return enrichSummaries(rows);
 }
 
 /**
@@ -180,15 +213,16 @@ export async function listPublishedFeed(opts: {
     // check missed. Slicing the probe off before shaping keeps the
     // response contract intact.
     take: limit + 1,
-    // Cursor fields are selected alongside the summary so we can build
-    // `nextCursor` without a second query. `id` is not part of the
-    // public shape — `shapeSummary` drops it via structural picking.
-    select: { ...publicArticleSummarySelect, id: true },
+    // `id` is already selected by `publicArticleSummarySelect` since
+    // slice 7 (needed for the clap-count enrichment join); we reuse it
+    // for the cursor tiebreaker without a second column selection. It's
+    // dropped from the public shape by `shapeSummary`.
+    select: publicArticleSummarySelect,
   });
 
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
-  const items = pageRows.map(shapeSummary);
+  const items = await enrichSummaries(pageRows);
   const nextCursor = hasMore
     ? encodeCursor({
         p: pageRows[pageRows.length - 1]!.publishedAt!.toISOString(),

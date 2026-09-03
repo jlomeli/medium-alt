@@ -82,7 +82,18 @@ export async function POST(req: Request) {
         },
         select: articleViewSelect,
       });
-      return NextResponse.json({ article: shapeArticleView(article) }, { status: 201 });
+      // A freshly-created article has no claps yet, and the caller
+      // is always the author (who can't self-clap). Both fields land
+      // as zero without touching the DB.
+      return NextResponse.json(
+        {
+          article: shapeArticleView(article, {
+            clapCount: 0,
+            viewer: { clapCount: 0, hasClapped: false },
+          }),
+        },
+        { status: 201 },
+      );
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&

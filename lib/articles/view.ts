@@ -31,10 +31,29 @@ export interface ArticleView {
    * order across the many-to-many).
    */
   tags: string[];
+  /**
+   * Slice 7 — aggregate clap count across every reader. Always
+   * present (0 for a never-clapped article) so client rendering is
+   * uniform. See docs/specs/claps.md § API contract.
+   */
+  clapCount: number;
+  /**
+   * Slice 7 — the current viewer's contribution + a convenience
+   * `hasClapped` boolean. Present ONLY when the caller is
+   * authenticated; for anonymous callers this key is OMITTED from
+   * the response (not set to `null`) so downstream clients can
+   * discriminate on presence rather than value. See docs/specs/claps.md
+   * § API contract (§ Additive shape changes).
+   */
+  viewer?: {
+    clapCount: number;
+    hasClapped: boolean;
+  };
 }
 
-/** Prisma `select` matching `ArticleView`. Kept next to the shape so a
- * change to one flags the other in review. */
+/** Prisma `select` matching `ArticleView` (minus the aggregate/viewer
+ * fields, which are populated separately from `lib/claps/service.ts`).
+ * Kept next to the shape so a change to one flags the other in review. */
 export const articleViewSelect = {
   slug: true,
   title: true,
@@ -60,6 +79,11 @@ export const articleViewSelect = {
  * Centralised so every route handler that reads an article passes
  * through the same normalisation — no risk of one route returning
  * `tags: [{ slug: "…" }]` and another returning `tags: string[]`.
+ *
+ * Slice 7 — `clapCount` is required; `viewer` is optional and appears
+ * on the response only when supplied by the caller (authenticated
+ * requests). Callers compute both via `lib/claps/service.ts` and pass
+ * them in — this file stays free of a DB dependency.
  */
 export function shapeArticleView<
   T extends {
@@ -76,7 +100,13 @@ export function shapeArticleView<
     author: { username: string | null; name: string | null };
     tags: Array<{ slug: string }>;
   },
->(row: T): ArticleView {
+>(
+  row: T,
+  claps: {
+    clapCount: number;
+    viewer?: { clapCount: number; hasClapped: boolean };
+  },
+): ArticleView {
   return {
     slug: row.slug,
     title: row.title,
@@ -90,5 +120,11 @@ export function shapeArticleView<
     updatedAt: row.updatedAt,
     author: row.author,
     tags: row.tags.map((t) => t.slug).sort(),
+    clapCount: claps.clapCount,
+    // Spread the viewer block only when supplied so the JSON output
+    // has NO `viewer` key at all for anonymous callers. Present-vs-
+    // absent is the contract; `null` would collapse two distinct
+    // states.
+    ...(claps.viewer ? { viewer: claps.viewer } : {}),
   };
 }

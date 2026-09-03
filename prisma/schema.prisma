@@ -40,6 +40,11 @@ model User {
   // `followers` = rows where this user is being followed.
   following           Follow[]             @relation("FollowFollower")
   followers           Follow[]             @relation("FollowFollowing")
+  // Claps — see docs/specs/claps.md. One row per (userId, articleId)
+  // pair, aggregated count 1–50. No inverse "who clapped for X"
+  // surface in v1; the composite PK on Clap is enough for both the
+  // read paths (viewer-state lookup, article aggregate).
+  claps               Clap[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -104,6 +109,8 @@ model Article {
   // needed today; if a slice ever wants "who tagged this / when", we
   // migrate to an explicit join model.
   tags          Tag[]
+  // Claps — see docs/specs/claps.md.
+  claps         Clap[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -169,6 +176,31 @@ model Follow {
   @@id([followerId, followingId])
   @@index([followerId])
   @@index([followingId])
+}
+
+// Claps — see docs/specs/claps.md.
+//
+// One row per (userId, articleId) pair with an aggregate `count` in
+// [1, 50]. The composite primary key gives natural upsert idempotency
+// for `POST /api/articles/{slug}/claps` (no findFirst round-trip), and
+// avoids the row amplification a per-clap event table would produce on
+// a rapid tap. Cascade in both directions so a deleted user's or a
+// deleted article's claps vanish cleanly.
+//
+// Index on `articleId` covers both "SUM(count) for this article"
+// (single article read) and "SUM(count) GROUP BY articleId" (feed
+// enrichment via `sumClapsForArticles`).
+model Clap {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  count     Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([userId, articleId])
+  @@index([articleId])
 }
 
 // Password-reset flow — see docs/specs/auth.md. `tokenHash` is sha256(raw);

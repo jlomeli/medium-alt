@@ -33,7 +33,8 @@ async function main() {
     `[seed] baseline: users +${summary.users.created} (skipped ${summary.users.skipped}), ` +
       `articles +${summary.articles.created} (skipped ${summary.articles.skipped}), ` +
       `tags +${summary.tags.created} (skipped ${summary.tags.skipped}), ` +
-      `follows +${summary.follows.created} (skipped ${summary.follows.skipped}).`,
+      `follows +${summary.follows.created} (skipped ${summary.follows.skipped}), ` +
+      `claps +${summary.claps.created} (skipped ${summary.claps.skipped}).`,
   );
 }
 

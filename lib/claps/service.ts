@@ -1,0 +1,331 @@
+/**
+ * Clap read/write helpers shared between Route Handlers and Server
+ * Components. See docs/specs/claps.md.
+ *
+ * Same module-per-relation pattern as `lib/follows/service.ts` — the
+ * write mutations and the aggregate reads live together so a change
+ * to "how a clap becomes durable" or "how the count is derived" flips
+ * in one place. The Route Handler at
+ * `app/api/articles/[slug]/claps/route.ts` and the RSC at
+ * `app/articles/[slug]/page.tsx` are both consumers.
+ *
+ * The per-viewer cap (`MAX_CLAPS_PER_VIEWER`) is enforced inside
+ * `addClaps` under a transaction. A check constraint would fire
+ * *after* the UPDATE and surface as an opaque DB error — putting the
+ * cap in the service keeps the clamp logic and the count arithmetic
+ * in one file.
+ */
+import { Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
+import { MAX_CLAPS_PER_VIEWER } from "@/lib/validation/claps";
+
+/**
+ * Aggregate + viewer-specific state for the current caller on one
+ * article. Shape mirrors what `GET /api/articles/{slug}` exposes on
+ * its `viewer` sibling block.
+ */
+export interface ViewerClapState {
+  clapCount: number;
+  hasClapped: boolean;
+}
+
+/**
+ * Thrown when `addClaps` reaches the DB insert but the referenced
+ * article (or, less plausibly, user) has been deleted between the
+ * route's `resolveArticleForCaller` and this service call. Route
+ * handlers catch this and reply 404 — the same anti-enumeration
+ * shape they use when the slug never existed. Without a distinct
+ * type the underlying `P2003` (FK violation) would bubble out as a
+ * 500, which would leak "the row was there a millisecond ago" and
+ * confuse a monitoring alert about a cascade delete that is doing
+ * exactly what it should.
+ */
+export class ClapTargetMissingError extends Error {
+  constructor() {
+    super("clap target article or user no longer exists");
+    this.name = "ClapTargetMissingError";
+  }
+}
+
+/**
+ * Result of `addClaps` — new counts after the write. `created` picks
+ * 201 vs. 200 in the route (matches the follow route's convention);
+ * `applied` is the actual delta the transaction wrote (may be less
+ * than the requested delta when the cap intervened).
+ */
+export interface AddClapsResult {
+  created: boolean;
+  applied: number;
+  viewerCount: number;
+  totalCount: number;
+}
+
+/**
+ * Read the viewer's clap contribution on one article. Anonymous
+ * callers should not invoke this — pass `undefined` at the caller
+ * and skip the read entirely.
+ */
+export async function getViewerClapState(
+  userId: string,
+  articleId: string,
+): Promise<ViewerClapState> {
+  const row = await db.clap.findUnique({
+    where: { userId_articleId: { userId, articleId } },
+    select: { count: true },
+  });
+  if (!row) return { clapCount: 0, hasClapped: false };
+  return { clapCount: row.count, hasClapped: true };
+}
+
+/**
+ * Aggregate `SUM(count)` for a single article. Convenience over the
+ * `sumClapsForArticles` batch when the caller has one id — one
+ * round-trip either way, but the caller keeps a clean scalar.
+ */
+export async function sumClapsForArticle(articleId: string): Promise<number> {
+  const rows = await db.clap.aggregate({
+    where: { articleId },
+    _sum: { count: true },
+  });
+  return rows._sum.count ?? 0;
+}
+
+/**
+ * Batch aggregate for enriching feed / listing responses. One
+ * `groupBy articleId, _sum: { count }` call — no N+1. Empty input
+ * skips the DB round-trip (fast path for "the feed has no rows"),
+ * matching `listPublishedFeed`'s `authorIn: []` shortcut.
+ *
+ * Returned Map is keyed by article id; a missing entry means the
+ * article has zero claps (rather than `null`) — the caller
+ * defaults to 0 without needing a null-check.
+ */
+export async function sumClapsForArticles(
+  articleIds: readonly string[],
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (articleIds.length === 0) return result;
+
+  const rows = await db.clap.groupBy({
+    by: ["articleId"],
+    where: { articleId: { in: [...articleIds] } },
+    _sum: { count: true },
+  });
+  for (const row of rows) {
+    result.set(row.articleId, row._sum.count ?? 0);
+  }
+  return result;
+}
+
+/**
+ * Post-write reconciliation snapshot: the viewer's own count + the
+ * article's aggregate, read atomically under `RepeatableRead` so the
+ * two queries share a single DB snapshot. Returns `null` if the
+ * viewer row is gone — which under this isolation level unambiguously
+ * means the article was cascade-deleted at or before the snapshot
+ * (the caller translates that to `ClapTargetMissingError` → 404).
+ *
+ * Why the transaction: under Postgres's default `ReadCommitted` a
+ * concurrent article DELETE landing between the two reads could
+ * leave `viewer` non-null (snapshot taken before delete) while
+ * `total` reads 0 (snapshot taken after) — the route would then
+ * ship a contradiction (`{ viewerCount: N, totalCount: 0 }`).
+ * `RepeatableRead` pins both statements to one snapshot, so either
+ * both reflect the pre-delete state (consistent, return) or both
+ * reflect the post-delete state (viewer null, return null → 404).
+ */
+async function readClapReconciliation(
+  userId: string,
+  articleId: string,
+): Promise<{ viewerCount: number; totalCount: number } | null> {
+  return db.$transaction(
+    async (tx) => {
+      const [viewer, agg] = await Promise.all([
+        tx.clap.findUnique({
+          where: { userId_articleId: { userId, articleId } },
+          select: { count: true },
+        }),
+        tx.clap.aggregate({
+          where: { articleId },
+          _sum: { count: true },
+        }),
+      ]);
+      if (!viewer) return null;
+      return { viewerCount: viewer.count, totalCount: agg._sum.count ?? 0 };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
+}
+
+/**
+ * Idempotent clap write. The composite `(userId, articleId)` primary
+ * key gives us a natural upsert:
+ *
+ *   - Fast path — no existing row: `create` with `count = delta`
+ *     (bounded to `MAX_CLAPS_PER_VIEWER`). `created: true` → route
+ *     emits 201.
+ *   - Existing row: read the current count under a row lock, clamp
+ *     `count + delta` to `MAX_CLAPS_PER_VIEWER`, `update`. `created:
+ *     false` → route emits 200.
+ *
+ * `applied` reflects the *actual* delta that landed in the DB —
+ * less than the requested delta when the cap intervened. The total
+ * count is recomputed from the aggregate rather than "old total +
+ * applied" so concurrent claps from other viewers are visible in
+ * the response without a second endpoint call.
+ *
+ * Self-clap is rejected at the route (400 `self-clap`), so this
+ * helper assumes the caller has already checked. Same delegation
+ * pattern as `follow` in `lib/follows/service.ts`.
+ */
+export async function addClaps(
+  userId: string,
+  articleId: string,
+  delta: number,
+): Promise<AddClapsResult> {
+  if (delta <= 0 || !Number.isInteger(delta)) {
+    // Defense in depth — validation should have caught this. Throwing
+    // rather than silently normalising so a schema drift shows up in
+    // the caller's error handler instead of a "why did my clap
+    // disappear" bug report.
+    throw new Error(`addClaps: delta must be a positive integer (got ${delta})`);
+  }
+
+  // Fast path — probe for an existing row before opening a
+  // transaction. Same idempotency shape as `follow()`: an "already
+  // has a row" happy path stays cheap.
+  const existing = await db.clap.findUnique({
+    where: { userId_articleId: { userId, articleId } },
+    select: { count: true },
+  });
+
+  if (!existing) {
+    // Try to insert. Two known race outcomes to translate:
+    //   - P2002 (composite-PK conflict) — another writer beat us to
+    //     the create. Fall through to the increment path so the
+    //     caller still sees idempotent success. Same contract
+    //     `follow()` uses.
+    //   - P2003 (FK violation on articleId or userId) — the article
+    //     (or user) was deleted between the route's
+    //     `resolveArticleForCaller` and this insert. Translate to
+    //     ClapTargetMissingError so the route replies 404 rather
+    //     than leaking a 500.
+    const initialDelta = Math.min(delta, MAX_CLAPS_PER_VIEWER);
+    let createSucceeded = false;
+    try {
+      await db.clap.create({
+        data: { userId, articleId, count: initialDelta },
+      });
+      createSucceeded = true;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        if (err.code === "P2003") {
+          throw new ClapTargetMissingError();
+        }
+        if (err.code === "P2002") {
+          // Fall through: another writer beat us to the create.
+          // Treat this call as an increment on the existing row.
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+    if (createSucceeded) {
+      // Reconcile under a shared snapshot — see
+      // `readClapReconciliation` for why the naive parallel reads
+      // aren't enough on their own.
+      const snap = await readClapReconciliation(userId, articleId);
+      if (!snap) throw new ClapTargetMissingError();
+      return {
+        created: true,
+        applied: initialDelta,
+        viewerCount: snap.viewerCount,
+        totalCount: snap.totalCount,
+      };
+    }
+  }
+
+  // Increment path — read under FOR UPDATE, clamp, write. The row
+  // lock serialises rapid taps from the same viewer so two POSTs
+  // in flight can't both read `count = 40` and both write `50`
+  // (losing the second delta) or both read `count = 49` and both
+  // write `50` (making the total suddenly `99` when only two
+  // claps were requested).
+  let applied: number;
+  try {
+    applied = await db.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ count: number }>>`
+        SELECT "count" FROM "Clap"
+        WHERE "userId" = ${userId} AND "articleId" = ${articleId}
+        FOR UPDATE
+      `;
+      const currentCount = rows.length > 0 ? rows[0]!.count : 0;
+      const nextCount = Math.min(currentCount + delta, MAX_CLAPS_PER_VIEWER);
+      const stepApplied = nextCount - currentCount;
+      if (stepApplied === 0) {
+        // Already at cap — nothing to write. Skipping the UPDATE
+        // keeps `updatedAt` stable so a "when did this viewer last
+        // engage" query later isn't confused by cap-hit no-ops.
+        return 0;
+      }
+      if (rows.length === 0) {
+        // Reached here via the P2002 catch above and the winning
+        // row has since been deleted (article-cascade race). Re-
+        // create; a further P2003 would mean the article itself is
+        // gone — caught below and surfaced as 404.
+        await tx.clap.create({
+          data: { userId, articleId, count: nextCount },
+        });
+      } else {
+        await tx.clap.update({
+          where: { userId_articleId: { userId, articleId } },
+          data: { count: nextCount },
+        });
+      }
+      return stepApplied;
+    });
+  } catch (err) {
+    // Article cascade-deleted mid-transaction → the re-create above
+    // trips P2003. Also handles the vanishingly-rare P2025 from a
+    // concurrent DELETE on the clap row we just SELECTed under
+    // FOR UPDATE (only possible if the DB was configured without
+    // proper row-locking, but the mapping is the same). Both mean
+    // "clap target no longer exists" → route replies 404.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      (err.code === "P2003" || err.code === "P2025")
+    ) {
+      throw new ClapTargetMissingError();
+    }
+    throw err;
+  }
+
+  // Reconcile under a shared snapshot — see `readClapReconciliation`
+  // for why the naive parallel reads aren't enough on their own.
+  const snap = await readClapReconciliation(userId, articleId);
+  if (!snap) throw new ClapTargetMissingError();
+  return {
+    created: false,
+    applied,
+    viewerCount: snap.viewerCount,
+    totalCount: snap.totalCount,
+  };
+}
+
+/**
+ * Idempotent clap-clear. Returns whether a row actually existed;
+ * the route ignores the flag (both cases → 204) but the return
+ * value is useful for tests and the seed's `--verbose` mode.
+ * Matches the `unfollow()` shape.
+ */
+export async function clearClaps(
+  userId: string,
+  articleId: string,
+): Promise<{ deleted: boolean }> {
+  const res = await db.clap.deleteMany({
+    where: { userId, articleId },
+  });
+  return { deleted: res.count > 0 };
+}
