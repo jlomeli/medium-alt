@@ -15,10 +15,13 @@ users without touching any of the shipped feature slices.
 
 Deliberately scoped tight:
 
-- **In:** header primary-CTA ("Write"), AccountMenu items linking to
-  `/me`, `/me/articles`, `/me/edit`, `/articles/new`.
+- **In:** header primary-CTA ("Write") linking to `/articles/new`;
+  AccountMenu items linking to `/me`, `/me/articles`, `/me/edit`.
 - **Out:** anything that would require a new endpoint or a new page.
   Every destination in this spec is a route that already ships.
+  `/articles/new` deliberately lives in the header, not the menu —
+  writing is a primary action, and burying it inside a dropdown
+  costs a click.
 
 ## Intent
 
@@ -78,12 +81,33 @@ Each becomes one Playwright test. Grouped by journey.
 - [ ] The three navigation items are `<Link>`s (client-side
   navigation) — not form submits. Only `Log out` remains a form
   submit because it clears the JWT cookie server-side.
-- [ ] Keyboard: opening the menu, pressing `Tab`, cycling through
-  items, and pressing `Enter` on `Your profile` lands on `/me`.
-  (One representative keyboard test — the click test above covers
-  the rest.)
+- [ ] Keyboard interaction follows the WAI-ARIA APG menu-widget
+  pattern (the dropdown is `role="menu"`, already shipped):
+  - Activating the toggle with `Enter` / `Space` opens the menu
+    and moves focus to the first menuitem.
+  - `ArrowDown` / `ArrowUp` move focus between menuitems and
+    wrap at both ends. A roving `tabindex` keeps focus visible.
+  - `Home` / `End` jump to the first / last menuitem.
+  - `Enter` on the focused menuitem activates it (navigates for
+    links; submits the logout form).
+  - `Escape` closes the menu and returns focus to the toggle
+    button.
+  - `Tab` from any menuitem closes the menu and moves focus to
+    the next focusable element after the toggle in tab order —
+    it does not cycle within the menu.
+- [ ] Representative Playwright keyboard test:
+  toggle-focused → `Enter` opens the menu → focus lands on
+  `Your profile` → `Enter` navigates to `/me`. The remaining
+  keys (`Home`, `End`, `Escape`, wrap-around, `Tab` exit) are
+  covered by unit tests on the menu primitive so the E2E
+  suite doesn't have to enumerate every combination.
 - [ ] Clicking outside the menu still closes it (existing behaviour
   regression-guarded).
+- [ ] Clicking any menuitem link closes the menu:
+  `aria-expanded="false"` on the toggle button and the dropdown
+  is out of the DOM by the time the destination page renders.
+  Verified by asserting `aria-expanded` on the toggle after
+  navigation completes.
 - [ ] Anonymous visitor sees no `AccountMenu` at all — header
   fallback (`Log in` / `Sign up`) is unchanged.
 
@@ -135,8 +159,25 @@ None. Every destination is a shipped page:
 - `components/auth/AccountMenu.tsx` — the dropdown gains three
   `<Link role="menuitem">` items above the existing `<form
   action="/api/logout">`. The `useEffect` outside-click handler
-  and the `useState` open/close still apply — links close the menu
-  naturally via navigation.
+  and the `useState` open/close still apply, with two additions
+  the shipped component doesn't yet handle:
+  - **Close-on-navigate.** `Header` lives in the app layout, so
+    a client-side `<Link>` click does NOT remount `AccountMenu`
+    — `useState open` would otherwise persist as `true` and
+    `aria-expanded` would stay `"true"` after the destination
+    renders. Each menuitem link's `onClick` must call
+    `setOpen(false)` (and a belt-and-braces `useEffect` on
+    `usePathname()` closes the menu on any path change, covering
+    programmatic navigations that don't originate from the
+    onClick handler).
+  - **Menu-widget keyboard model.** The shipped component
+    commits to `role="menu"` / `menuitem` but only handles the
+    outside-click close; native `Tab`-cycling between menuitems
+    is the disclosure pattern, not the menu-widget one. This
+    slice grows arrow-key navigation, `Home` / `End`, roving
+    `tabindex`, `Escape`-closes-and-returns-focus, and
+    `Tab`-exits-the-menu so the interaction matches the
+    committed ARIA roles. See § Acceptance criteria — Keyboard.
 
 ### Menu ordering rationale
 
