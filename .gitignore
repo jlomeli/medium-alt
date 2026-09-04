@@ -52,3 +52,5 @@ prisma/*.db-journal
 # uploads (dev only)
 public/uploads/
 tsconfig.tsbuildinfo
+.vercel
+.env*

@@ -64,6 +64,8 @@ A `data-testid` is only justified when the element genuinely has no accessible a
 - Sessions are established via the `loggedInPage` fixture, not by filling the login form. Tests in `e2e/tests/auth/` are the only exception.
 - Every test must be independently runnable — no ordering dependencies.
 
+**Test data lifecycle — isolation via uniqueness, not teardown.** Factories mint globally unique records (random-suffixed emails, usernames, slugs) so two tests — sequential or parallel — cannot see each other's data. Because isolation is guaranteed at creation time, specs do not delete their records in an `afterEach`, and specs should not add `test.beforeEach` / `test.afterEach` hooks to manage DB rows — that role belongs to the fixture's `use()` seam in `e2e/support/fixtures.ts` (anything before `use()` is `beforeEach`; anything after is `afterEach`). Orphan rows accumulate in the dev DB; `pnpm db:reset` is the nuke button when that matters. `test.beforeEach` in a spec is reserved for **external** shared state a fixture can't own alone (e.g., purging the Mailpit inbox in `e2e/tests/auth/password-reset.spec.ts`).
+
 ### 8.4 Tagging
 
 Every UI test title carries at least one tag: `@smoke` or `@regression`. Optional supplements: `@slow`, `@visual`, `@flaky` (`@flaky` tests are quarantined and blocked from merging until fixed).
