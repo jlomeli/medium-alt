@@ -24,6 +24,27 @@
  */
 import { spawnSync } from "node:child_process";
 
+/**
+ * Preflight: fail fast with a legible message when the DB URL is empty.
+ *
+ * A Vercel "linked" secret that no longer resolves comes through as the empty
+ * string, not `undefined` — `process.env.DATABASE_URL === ""`. Prisma then
+ * dies mid-build with P1012 "You must provide a nonempty URL. The environment
+ * variable DATABASE_URL resolved to an empty string," which is easy to miss
+ * in a long build log. This check surfaces it as the first line of output.
+ *
+ * We only guard `DATABASE_URL` here. `DIRECT_URL` is normalized below and its
+ * final empty-ness is checked after the fallback chain runs.
+ */
+if (!process.env.DATABASE_URL) {
+  console.error(
+    "[build] DATABASE_URL is empty or unset. On Vercel this usually means a " +
+      "linked secret was rotated/removed; re-set it via `vercel env add " +
+      "DATABASE_URL <target>` and redeploy. See .env.example for shape.",
+  );
+  process.exit(1);
+}
+
 if (!process.env.DIRECT_URL) {
   // Try known Neon-Vercel integration names. If none are set at this
   // process level, let the subprocesses fall back to their own .env
@@ -37,6 +58,19 @@ if (!process.env.DIRECT_URL) {
     process.env.DIRECT_URL = process.env[source];
     console.log(`[build] DIRECT_URL was unset; using ${source}`);
   }
+}
+
+// Post-fallback check: if DIRECT_URL is still empty after the chain above,
+// `prisma migrate deploy` would fail with the same P1012 as the DATABASE_URL
+// case. Same treatment — surface it early with an actionable message.
+if (!process.env.DIRECT_URL) {
+  console.error(
+    "[build] DIRECT_URL is empty and no fallback env var was set " +
+      "(DATABASE_URL_UNPOOLED, POSTGRES_URL_NON_POOLING, DATABASE_URL). " +
+      "Prisma migrations need a non-pooled URL — set DIRECT_URL directly or " +
+      "confirm the Neon-Vercel integration is populating one of the fallbacks.",
+  );
+  process.exit(1);
 }
 
 const steps = [
