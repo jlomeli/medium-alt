@@ -11,17 +11,27 @@ import type { Page, Locator } from "@playwright/test";
  * cross-page fragment. See docs/CODING_STANDARDS.md §Testing.
  */
 export class HeaderComponent {
+  readonly writeLink: Locator;
   readonly logInLink: Locator;
   readonly signUpLink: Locator;
   readonly accountMenuButton: Locator;
+  readonly menu: Locator;
+  readonly yourProfileMenuItem: Locator;
+  readonly yourArticlesMenuItem: Locator;
+  readonly settingsMenuItem: Locator;
   readonly logOutButton: Locator;
 
   constructor(private readonly page: Page) {
     const nav = this.page.getByRole("banner");
+    this.writeLink = nav.getByRole("link", { name: "Write" });
     this.logInLink = nav.getByRole("link", { name: "Log in" });
     this.signUpLink = nav.getByRole("link", { name: "Sign up" });
     this.accountMenuButton = nav.getByRole("button", { name: "Account" });
-    // Log out lives inside the menu; opening the menu reveals it.
+    // Menuitems live inside the dropdown; opening the menu reveals them.
+    this.menu = this.page.getByRole("menu");
+    this.yourProfileMenuItem = this.page.getByRole("menuitem", { name: "Your profile" });
+    this.yourArticlesMenuItem = this.page.getByRole("menuitem", { name: "Your articles" });
+    this.settingsMenuItem = this.page.getByRole("menuitem", { name: "Settings" });
     this.logOutButton = this.page.getByRole("menuitem", { name: "Log out" });
   }
 
