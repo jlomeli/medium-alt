@@ -128,9 +128,14 @@ export function AccountMenu({ userLabel }: { userLabel: string }) {
         break;
       case "Tab":
         // Do NOT preventDefault — the browser needs to move focus to the
-        // next tab stop. Roving tabindex means only the active menuitem is
-        // in tab order, so Tab / Shift+Tab naturally exit the menu. We just
-        // close it on the way out.
+        // next tab stop. Pin activeElement to the persistent toggle BEFORE
+        // scheduling the close: the menuitem is about to unmount, and if
+        // React flushes before the browser processes Tab's default, focus
+        // would reset to document.body and restart the tab sequence. The
+        // toggle stays mounted, so Tab (forward) moves from toggle → next
+        // after toggle, matching the spec; Shift+Tab moves from toggle →
+        // previous element, which is the natural backward exit.
+        toggleRef.current?.focus();
         setOpen(false);
         break;
     }
@@ -179,7 +184,12 @@ export function AccountMenu({ userLabel }: { userLabel: string }) {
               );
             }
             return (
-              <form key="logout" action="/api/logout" method="post">
+              // role="none" removes the form from the accessibility tree so
+              // the menuitem button reads as a direct child of role="menu",
+              // preserving the menu-widget parent/child relationship expected
+              // by AT. Native submission (action / method / onSubmit) is
+              // unaffected by ARIA roles.
+              <form key="logout" role="none" action="/api/logout" method="post">
                 <button
                   type="submit"
                   role="menuitem"
