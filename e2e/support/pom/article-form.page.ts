@@ -35,6 +35,16 @@ export class ArticleFormPage extends BasePage {
   // Slice 5 — tags input on the article form.
   readonly tagsField;
 
+  // articles-delete-ui.md — the reusable ConfirmDialog surface owned
+  // by <DeleteArticleButton>. The dialog's accessible name is the
+  // interpolated heading `Delete "<title>"?`, so `getByRole('dialog',
+  // { name: /^Delete "/ })` scopes uniquely without a `data-testid`.
+  readonly deleteConfirmDialog;
+  readonly deleteConfirmCancelButton;
+  readonly deleteConfirmSubmitButton;
+  readonly deleteErrorSignInLink;
+  readonly deleteErrorOkButton;
+
   readonly toolbar;
   readonly boldButton;
   readonly italicButton;
@@ -77,6 +87,27 @@ export class ArticleFormPage extends BasePage {
     this.saveButton = this.page.getByRole("button", { name: /^(save|publish)/i });
     // Delete only appears on the edit page.
     this.deleteButton = this.page.getByRole("button", { name: "Delete article" });
+
+    // Delete confirm dialog + its buttons. The submit button's name is
+    // `Delete` at rest and `Deleting…` mid-request (spec § UI surface),
+    // so the regex tolerates both — individual tests assert the exact
+    // form when it matters (e.g. in-flight lockout).
+    this.deleteConfirmDialog = this.page.getByRole("dialog", {
+      name: /^Delete "/,
+    });
+    this.deleteConfirmCancelButton = this.deleteConfirmDialog.getByRole("button", {
+      name: "Cancel",
+    });
+    this.deleteConfirmSubmitButton = this.deleteConfirmDialog.getByRole("button", {
+      name: /^(Delete|Deleting…)$/,
+    });
+    // Error-state affordances the dialog swaps in on 401 / 404.
+    this.deleteErrorSignInLink = this.deleteConfirmDialog.getByRole("link", {
+      name: /sign in/i,
+    });
+    this.deleteErrorOkButton = this.deleteConfirmDialog.getByRole("button", {
+      name: "OK",
+    });
 
     // Toolbar — scoped so a same-named button elsewhere on the page
     // (unlikely, but future-proof) can't collide.
@@ -216,20 +247,33 @@ export class ArticleFormPage extends BasePage {
   }
 
   /**
-   * Click "Delete article" and wait for the DELETE response before
-   * returning — same rationale as `submit()`: callers can immediately
-   * follow up with a verification GET without racing an in-flight write.
-   * The caller is responsible for wiring `page.once("dialog", ...)` to
-   * accept the `window.confirm()` before invoking.
+   * Open the delete-confirm dialog and wait for it to be visible. The
+   * dialog is `role="dialog"` with an interpolated heading — see
+   * `deleteConfirmDialog` locator. Individual tests then click
+   * `deleteConfirmSubmitButton`, `deleteConfirmCancelButton`, press
+   * Escape, or click the backdrop; keeping those steps inline in the
+   * test file makes the cancel-affordance assertions read cleanly.
    */
-  async delete(): Promise<void> {
+  async openDeleteDialog(): Promise<void> {
+    await this.deleteButton.click();
+    await this.deleteConfirmDialog.waitFor({ state: "visible" });
+  }
+
+  /**
+   * Full happy-path helper: open the confirm dialog, click `Delete`,
+   * and wait for the DELETE response so a follow-up assertion doesn't
+   * race an in-flight write. Only for tests that don't care about the
+   * intermediate dialog state.
+   */
+  async confirmDelete(): Promise<void> {
+    await this.openDeleteDialog();
     await Promise.all([
       this.page.waitForResponse(
         (res) =>
           /\/api\/articles\/[^/?]+$/.test(new URL(res.url()).pathname) &&
           res.request().method() === "DELETE",
       ),
-      this.deleteButton.click(),
+      this.deleteConfirmSubmitButton.click(),
     ]);
   }
 
