@@ -158,13 +158,33 @@ See `articles-crud.md` § API surface and
 - `app/articles/[slug]/edit/page.tsx` — hosts the button + dialog.
   Existing page; grows a new component slot below the
   `<ArticleForm>`.
+- **`components/articles/ArticleForm.tsx` — loses its existing
+  delete path.** Today `ArticleForm` owns a `handleDelete` that
+  fires `window.confirm(...)` and a `Delete article` button wired
+  to it (`ArticleForm.tsx` L176-193, L316). This slice removes
+  both. `DeleteArticleButton` becomes the sole delete flow so
+  there is exactly one UI trigger, one confirm surface, and one
+  error-handling code path. No native `window.confirm` remains
+  anywhere in the article-management surface.
 
 Shared components:
 
 - `<DeleteArticleButton slug={string} title={string} />` —
-  client component. Owns the button, the modal, the `useTransition`
-  around `fetch(url, { method: 'DELETE' })`, and the redirect via
-  `router.push('/me/articles')` + `router.refresh()`.
+  client component. Owns the button, the modal, the redirect via
+  `router.push('/me/articles')` + `router.refresh()`, and the
+  full pending-state contract:
+  - Uses `useTransition`; the `startTransition` callback is an
+    `async` function that **awaits** the `fetch(url, { method: 'DELETE' })`
+    (and its response handling) so `isPending` stays true for the
+    full request lifetime, not just the synchronous dispatch.
+  - The `Delete` button inside the dialog binds `disabled={isPending}`
+    and renders `Deleting…` while `isPending` is true. No separate
+    local `deleting` boolean — a single source of truth prevents
+    the "button re-enables mid-request" race the current
+    `ArticleForm.handleDelete` is vulnerable to.
+  - The trigger button (`Delete article`, outside the dialog) is
+    also `disabled={isPending}` so a user cannot reopen the
+    dialog mid-request.
 - Reuses whatever primitive dialog exists in `components/` if one
   is present; otherwise adds a minimal focus-trap dialog under
   `components/ui/ConfirmDialog.tsx` designed so future destructive
@@ -182,15 +202,47 @@ None. The `DELETE` endpoint is called through the same authed
 ## E2E test plan
 
 - `e2e/tests/articles/delete.spec.ts` — supersedes the placeholder
-  from the parent spec. Covers:
-  - Draft delete happy path → redirect to `/me/articles`, row gone.
-  - Published delete happy path → same.
-  - Cancel via button, Escape, and backdrop each close the dialog
-    with no network call (asserted via `page.on('request')`).
-  - Concurrent-delete 404 shows the "already removed" message.
-  - Focus lands on `Cancel` on open, and returns to the trigger
-    button on close.
-  `@smoke @regression`
+  from the parent spec. The existing file uses
+  `page.once('dialog', d => d.accept())` against `window.confirm`;
+  the replacement targets the reusable `role="dialog"` modal via
+  `getByRole('dialog')` and drops all native-dialog handling.
+  Covers:
+  - **Draft delete happy path** → dialog opens, `Delete` clicked,
+    redirect to `/me/articles`, deleted row absent from the table
+    (asserted via `getByRole('row', { name: <title> })` being
+    not-visible).
+  - **Published delete happy path** → same assertions on a
+    `published: true` article.
+  - **Cancel via `Cancel` button, `Escape`, and backdrop click**
+    each close the dialog with **no** `DELETE` fired — asserted
+    with a `page.on('request')` collector filtered to
+    `request.method() === 'DELETE'` returning empty.
+  - **In-flight lockout** — mid-request the `Delete` button
+    reports `getByRole('button', { name: 'Deleting…' })` and
+    `toBeDisabled()`; a rapid second click cannot land a duplicate
+    `DELETE` (verified via `page.on('request')` count === 1). The
+    outer `Delete article` trigger is also disabled during the
+    transition.
+  - **401 handling** — session cleared between page load and
+    click; dialog surfaces "Please sign in again to delete this
+    article." with a `getByRole('link', { name: /sign in/i })`
+    pointing at `/login?callbackUrl=<current-edit-url>`.
+  - **Concurrent-delete 404** — article deleted out-of-band via
+    the API before clicking `Delete`; dialog surfaces "This
+    article has already been removed." with an `OK` button that
+    navigates to `/me/articles`. No console errors
+    (`page.on('pageerror')` remains silent).
+  - **5xx / network failure** — request routed through
+    `page.route()` to return `500` (and a separate case aborting
+    the request); dialog surfaces "Couldn't delete this article.
+    Please try again." and the `Delete` button re-enables so a
+    retry is a real retry.
+  - **Focus contract** — initial focus lands on `Cancel` (asserted
+    via `expect(cancelButton).toBeFocused()` immediately after
+    open); focus returns to the `Delete article` trigger when the
+    dialog closes via `Cancel`, `Escape`, and backdrop click.
+  `@smoke` on the two happy-path tests + the cancel-without-request
+  test; `@regression` on the full file.
 
 Fixtures — none new. The existing `articleFactory.create()` seeds
 the article to delete.
