@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { ArticleForm } from "@/components/articles/ArticleForm";
+import { DeleteArticleButton } from "@/components/articles/DeleteArticleButton";
 import type { TiptapDoc } from "@/lib/articles/tiptap";
 
 /**
@@ -36,27 +37,37 @@ export default async function EditArticlePage({
   if (!article || article.authorId !== session.user.id) notFound();
 
   return (
-    <ArticleForm
-      mode="edit"
-      slug={article.slug}
-      initial={{
-        title: article.title,
-        subtitle: article.subtitle ?? "",
-        // Prisma types `Json` columns as `JsonValue`; the write-path Zod
-        // schema guarantees the stored shape is a Tiptap doc, so a cast
-        // at this boundary is safe.
-        body: article.body as unknown as TiptapDoc,
-        coverImageUrl: article.coverImageUrl,
-        coverImageAlt: article.coverImageAlt,
-        published: article.published,
-        // Prefill from the article's current tag slugs (sorted for a
-        // stable text representation across renders). Editor input is
-        // comma-separated; the same shape the server parses.
-        tags: article.tags
-          .map((t) => t.slug)
-          .sort()
-          .join(", "),
-      }}
-    />
+    <>
+      <ArticleForm
+        mode="edit"
+        slug={article.slug}
+        initial={{
+          title: article.title,
+          subtitle: article.subtitle ?? "",
+          // Prisma types `Json` columns as `JsonValue`; the write-path Zod
+          // schema guarantees the stored shape is a Tiptap doc, so a cast
+          // at this boundary is safe.
+          body: article.body as unknown as TiptapDoc,
+          coverImageUrl: article.coverImageUrl,
+          coverImageAlt: article.coverImageAlt,
+          published: article.published,
+          // Prefill from the article's current tag slugs (sorted for a
+          // stable text representation across renders). Editor input is
+          // comma-separated; the same shape the server parses.
+          tags: article.tags
+            .map((t) => t.slug)
+            .sort()
+            .join(", "),
+        }}
+      />
+      {/* Mounted outside <ArticleForm> so the delete dialog is never
+          nested inside the article form — a nested `<form>` would be
+          stripped by the browser, and any `<button type="submit">`
+          inside the dialog would submit the outer form. See
+          docs/specs/articles-delete-ui.md § UI surface. */}
+      <div className="mx-auto max-w-2xl px-6 pb-6">
+        <DeleteArticleButton slug={article.slug} title={article.title} />
+      </div>
+    </>
   );
 }
