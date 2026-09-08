@@ -59,7 +59,9 @@ export function ArticleForm({ mode, initial, slug }: Props) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topLevelError, setTopLevelError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  // Delete was formerly owned here (a `handleDelete` + `window.confirm`).
+  // It now lives in <DeleteArticleButton>, which is mounted on the edit
+  // page — see docs/specs/articles-delete-ui.md § UI surface.
 
   const heading = mode === "create" ? "New article" : "Edit article";
   const submitLabel = published ? "Publish" : "Save draft";
@@ -170,25 +172,6 @@ export function ArticleForm({ mode, initial, slug }: Props) {
       setTopLevelError("Couldn't reach the server. Please try again.");
     } finally {
       if (hadFailure) setSubmitting(false);
-    }
-  }
-
-  async function handleDelete() {
-    if (deleting || mode !== "edit" || !slug) return;
-    if (!window.confirm("Delete this article? This cannot be undone.")) return;
-    setDeleting(true);
-    try {
-      const res = await fetch(`/api/articles/${slug}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) {
-        setTopLevelError("Could not delete the article.");
-        setDeleting(false);
-        return;
-      }
-      router.push("/me/articles");
-      router.refresh();
-    } catch {
-      setTopLevelError("Couldn't reach the server. Please try again.");
-      setDeleting(false);
     }
   }
 
@@ -307,20 +290,13 @@ export function ArticleForm({ mode, initial, slug }: Props) {
             {submitLabel}
           </button>
           {mode === "edit" && slug && (
-            <>
-              <Link href={`/articles/${slug}`} className="text-sm">
-                Cancel
-              </Link>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={deleting}
-                className="ml-auto rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                Delete article
-              </button>
-            </>
+            <Link href={`/articles/${slug}`} className="text-sm">
+              Cancel
+            </Link>
           )}
+          {/* The Delete button used to sit here. It now lives in
+              <DeleteArticleButton>, mounted on the edit page below the
+              form (docs/specs/articles-delete-ui.md § UI surface). */}
         </div>
         {topLevelError && (
           <p role="alert" className="text-sm text-red-600">
