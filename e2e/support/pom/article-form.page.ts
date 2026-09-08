@@ -37,8 +37,11 @@ export class ArticleFormPage extends BasePage {
 
   // articles-delete-ui.md — the reusable ConfirmDialog surface owned
   // by <DeleteArticleButton>. The dialog's accessible name is the
-  // interpolated heading `Delete "<title>"?`, so `getByRole('dialog',
-  // { name: /^Delete "/ })` scopes uniquely without a `data-testid`.
+  // current-state heading — `Delete "<title>"?` at rest / on 5xx,
+  // `Sign in to continue` on 401, `Article already removed` on 404.
+  // The regex enumerates all three so scoped child locators
+  // (`deleteErrorSignInLink`, `deleteErrorOkButton`) resolve after
+  // state transitions.
   readonly deleteConfirmDialog;
   readonly deleteConfirmCancelButton;
   readonly deleteConfirmSubmitButton;
@@ -93,7 +96,7 @@ export class ArticleFormPage extends BasePage {
     // so the regex tolerates both — individual tests assert the exact
     // form when it matters (e.g. in-flight lockout).
     this.deleteConfirmDialog = this.page.getByRole("dialog", {
-      name: /^Delete "/,
+      name: /^(Delete "|Sign in to continue|Article already removed)/,
     });
     this.deleteConfirmCancelButton = this.deleteConfirmDialog.getByRole("button", {
       name: "Cancel",

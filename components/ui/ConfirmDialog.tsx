@@ -21,14 +21,19 @@ interface ConfirmDialogProps {
  *
  * Contract:
  * - `role="dialog"`, `aria-modal="true"`, `aria-labelledby={labelledBy}`.
- * - Escape and backdrop click → `onDismiss()`. Caller decides whether to
- *   actually close (e.g. mid-request lockout ignores).
+ * - Escape (bound on `document` while open) and backdrop click →
+ *   `onDismiss()`. Caller decides whether to actually close (e.g.
+ *   mid-request lockout ignores).
  * - On mount: focus lands on the first tabbable element in the panel.
  *   Callers put `Cancel` first in DOM order so that "initial focus is
- *   the safe action" (spec § Accessibility) falls out naturally without
- *   an extra ref/prop.
- * - On close: focus is restored to the element that was focused when the
- *   dialog opened — typically the trigger `<button>` that toggled `open`.
+ *   the safe action" (spec § Accessibility) falls out naturally.
+ * - On close: focus is restored to the element that was focused when
+ *   the dialog opened — typically the trigger `<button>` that toggled
+ *   `open`.
+ * - Focus recovery: if the panel's children change (state-machine
+ *   transition unmounts the currently-focused button) and focus lands
+ *   outside the panel, focus is pulled back to the first tabbable
+ *   inside — Escape/Tab stay wired.
  * - Tab / Shift+Tab wrap within the dialog's focusables.
  */
 export function ConfirmDialog({
@@ -38,21 +43,63 @@ export function ConfirmDialog({
   children,
 }: ConfirmDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Kept in a ref so the document-level Escape listener doesn't need
+  // `onDismiss` in its effect deps — rebinding on every render would
+  // race with in-flight key events and add noise to the effect graph.
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
 
   useEffect(() => {
     if (!open) return;
+    // Snapshot whoever had focus so we can restore it on close.
+    // `useEffect` runs after commit, so the panel's focusables are
+    // already in the DOM — no microtask defer needed.
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    // Defer to next microtask so the newly-rendered focusables are in the DOM.
     const focusables = getFocusable(panelRef.current);
     focusables[0]?.focus();
     return () => {
-      // Restore focus to whatever had it before we opened. If the trigger
-      // is still mounted (the common case — dialog closed but page stays)
-      // it regains focus; if the page has navigated away, the ref points
-      // at a detached node and `.focus()` is a no-op.
+      // If the trigger is still mounted (the common case — dialog
+      // closed but page stays) it regains focus; if the page has
+      // navigated away, the ref points at a detached node and
+      // `.focus()` is a no-op.
       previouslyFocused?.focus?.();
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    // Bind Escape on `document` rather than the panel's `onKeyDown`.
+    // State-machine transitions inside the panel (e.g. Delete →
+    // session-expired unmounts the currently-focused Delete button)
+    // briefly park focus on `<body>`; a panel-scoped keydown handler
+    // would miss Escape presses in that window.
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onDismissRef.current();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    // Focus recovery — runs on every child re-render (children identity
+    // churns per render, so this fires whenever the panel's contents
+    // change). If a state transition unmounted the focused element and
+    // focus escaped to `<body>`, pull it back to the first tabbable so
+    // Tab wrap and keyboard interaction keep working. When focus is
+    // already inside the panel this is a no-op.
+    if (!panel.contains(document.activeElement)) {
+      const focusables = getFocusable(panel);
+      focusables[0]?.focus();
+    }
+  }, [open, children]);
 
   if (!open) return null;
 
@@ -68,11 +115,6 @@ export function ConfirmDialog({
         if (e.target === e.currentTarget) onDismiss();
       }}
       onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          onDismiss();
-          return;
-        }
         if (e.key !== "Tab") return;
         const focusables = getFocusable(panelRef.current);
         if (focusables.length === 0) return;
