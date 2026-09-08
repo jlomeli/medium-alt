@@ -115,8 +115,9 @@ Each becomes one Playwright test. Grouped by journey.
   with two buttons: `Resend verification` and `Cancel change`.
 - [ ] `Cancel change` deletes the pending row; the section reverts
   to the input form.
-- [ ] `Resend verification` re-issues a fresh 1-hour token,
-  invalidates the previous one, and re-sends the email. UI surfaces
+- [ ] `Resend verification` POSTs to `/api/me/email/resend`, which
+  re-issues a fresh 1-hour token, invalidates the previous one, and
+  re-sends the email to the same pending address. UI surfaces
   "Verification resent to <new-email>."
 - [ ] While a pending change exists, submitting a DIFFERENT new
   email replaces the pending row (invalidates the old token, issues
@@ -157,13 +158,23 @@ Each becomes one Playwright test. Grouped by journey.
 - [ ] `POST /api/me/password` — anonymous → `401 { error: {
   code: "unauthenticated" } }`.
 - [ ] `POST /api/me/email` — signed-in, valid new email → `202 {
-  pending: true }`. Pending row created; email dispatched.
+  pending: true }`. Pending row is committed FIRST, then the
+  verification email is dispatched (see § Delivery ordering below).
 - [ ] `POST /api/me/email` — email already in use → same `202 {
   pending: true }` (anti-enumeration). No email sent, no pending
   row created.
 - [ ] `POST /api/me/email` — new = current → `400 { error: {
   field: "newEmail", code: "same-as-current" } }`.
 - [ ] `POST /api/me/email` — anonymous → `401`.
+- [ ] `POST /api/me/email/resend` — signed-in, pending row exists
+  → `204`. Rotates the token (invalidates the previous one),
+  updates `expiresAt` to now + 1h, re-dispatches to the same
+  pending address.
+- [ ] `POST /api/me/email/resend` — signed-in, no pending row →
+  `404 { error: { code: "no-pending" } }`. UI only exposes the
+  Resend button when a pending row is present; the 404 is
+  defense-in-depth against tab-race cancellation.
+- [ ] `POST /api/me/email/resend` — anonymous → `401`.
 - [ ] `POST /api/me/email/cancel` — signed-in, pending row exists
   → `204`, row deleted.
 - [ ] `POST /api/me/email/cancel` — signed-in, no pending row →
@@ -178,10 +189,10 @@ Each becomes one Playwright test. Grouped by journey.
 
 ### OpenAPI coverage
 
-- [ ] All four new endpoints (`POST /api/me/password`,
-  `POST /api/me/email`, `POST /api/me/email/cancel`,
-  `POST /api/me/email/confirm`) appear in `/api/openapi.json` —
-  enforced by the coverage guard from
+- [ ] All five new endpoints (`POST /api/me/password`,
+  `POST /api/me/email`, `POST /api/me/email/resend`,
+  `POST /api/me/email/cancel`, `POST /api/me/email/confirm`) appear
+  in `/api/openapi.json` — enforced by the coverage guard from
   [`api-docs.md`](api-docs.md).
 
 ## Non-goals
@@ -235,15 +246,21 @@ pendingEmailChange PendingEmailChange?
 ```
 
 Migration: `pnpm db:migrate --name account-security-add-pending-email-change`.
+This migration is follow-on work owned by the feature-implementation
+PR — the docs-only PR that lands this spec deliberately does NOT
+create the migration; it lands alongside the code that uses it.
 
 ### Token strategy
 
-- Reuses the `password-reset` primitive (`lib/auth/tokens.ts` /
-  equivalent): 256-bit `crypto.randomBytes(32)`, hex-encoded in
-  the URL, stored server-side as an argon2id / sha256 hash so a
-  DB read alone can't reconstruct any live link. Follow whatever
-  the password-reset flow already picked so we don't add a second
-  hashing convention.
+- Reuses the `password-reset` primitive from
+  [`lib/auth/reset-token.ts`](../../lib/auth/reset-token.ts):
+  `generate()` returns `{ raw, hash }` where `raw` = 32-byte
+  `crypto.randomBytes` hex-encoded (64 chars) and `hash` =
+  `createHash("sha256").update(raw).digest("hex")`. Only `hash` is
+  stored in `PendingEmailChange.tokenHash`; `raw` goes in the
+  verification link. Confirm recomputes `hash(raw)` and looks the row
+  up by `tokenHash`. Same helper, same deterministic convention — one
+  hashing primitive across the auth surface.
 - 1-hour TTL. Symmetric with password-reset for a shared reader
   mental model.
 - Single-use. Confirm consumes the row (either happy path or
@@ -251,6 +268,35 @@ Migration: `pnpm db:migrate --name account-security-add-pending-email-change`.
 - Only one pending change per user at a time — enforced by
   `@unique` on `userId`. A second `POST /api/me/email` REPLACES
   the row (invalidates the previous token).
+
+### Delivery ordering (DB / mail boundary)
+
+For `POST /api/me/email` and `POST /api/me/email/resend`, the
+handler MUST:
+
+1. Open a Prisma transaction, `upsert` the `PendingEmailChange` row
+   (rotating `tokenHash` + `expiresAt`), and COMMIT.
+2. Only after the commit succeeds, hand the raw token to the
+   verification-email dispatcher.
+
+Rationale: dispatching before commit lets a rollback (unique-index
+race, connection drop) leak a link the DB will never recognise —
+confirm always returns `400 invalid`, and the user has no way to
+cancel or resend from the UI (they don't have a pending row). The
+inverse failure mode — commit succeeds, mail dispatch fails — is
+strictly better: the pending row is visible on `/me/edit`, so the
+user can hit `Resend verification` (which re-dispatches) or `Cancel
+change`. A mail-dispatch failure therefore surfaces as an inline
+warning on the 202 response's success indicator ("Verification is
+pending — if the email doesn't arrive, try Resend."). We do not
+need a full outbox pattern for this slice — a synchronous
+after-commit dispatch is sufficient given the resend affordance —
+but the ordering is a correctness requirement, not a nice-to-have.
+
+The same ordering rule applies to `/confirm` in reverse: swap
+`User.email` and delete the pending row inside one transaction so
+a mid-flight failure can't leave `User.email` swapped while the
+pending row (with its now-consumable token) still exists.
 
 ### Anti-enumeration on `POST /api/me/email`
 
@@ -275,6 +321,7 @@ from being an email-enumeration oracle.
 | ------ | ----------------------------- | ------ | ------------------------------------------ | ------------------------------------------------------------------ |
 | POST   | `/api/me/password`            | Yes    | `{ currentPassword, newPassword }`         | `200 { ok: true }`; `400 { error: { field, code, message? } }`; `401` |
 | POST   | `/api/me/email`               | Yes    | `{ newEmail }`                             | `202 { pending: true }`; `400`; `401`                              |
+| POST   | `/api/me/email/resend`        | Yes    | *(none)*                                   | `204`; `404 { error: { code: "no-pending" } }`; `401`              |
 | POST   | `/api/me/email/cancel`        | Yes    | *(none)*                                   | `204` (idempotent); `401`                                          |
 | POST   | `/api/me/email/confirm`       | mixed  | `{ token }`                                | `200 { email }`; `400`; `409 { error: { field: "email", code: "in-use" } }` |
 
@@ -298,6 +345,8 @@ of the write surface. New codes:
   `field: "newPassword", code: "same-as-current" | "weak" | "out-of-range"`.
 - `POST /api/me/email`: `field: "newEmail", code: "same-as-current" |
   "invalid"`.
+- `POST /api/me/email/resend`: `code: "no-pending"` (with `404`, no
+  `field` — the failure isn't attached to a submitted input).
 - `POST /api/me/email/confirm`: `field: "token", code: "invalid"`;
   `field: "email", code: "in-use"` (with `409`).
 
@@ -317,8 +366,16 @@ Shared components under `components/account/`:
 - `<ChangePasswordSection />` — client component, three fields +
   submit + inline errors. Encapsulates the fetch to `/api/me/password`.
 - `<ChangeEmailSection pending={PendingEmailChange | null} />` —
-  client component. Renders the pending banner (with Resend /
-  Cancel) or the empty-input form based on the prop.
+  client component. When `pending === null`: renders the empty
+  input form (New email + Send verification). When `pending !==
+  null`: renders BOTH the pending banner (with `Resend
+  verification` + `Cancel change` buttons) AND the input form
+  below it, so a user who typed the wrong address can submit a
+  different one without a Cancel-first round-trip — that submission
+  atomically replaces the pending row (see acceptance criteria §
+  Change email — pending state). The input's submit label stays
+  `Send verification`; the "one pending change per user" invariant
+  on the server enforces the replacement semantic.
 - Reuses field-level error rendering from the existing
   `<EditProfileForm>` so the visual grammar of inline errors stays
   consistent.
