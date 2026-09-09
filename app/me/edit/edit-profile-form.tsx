@@ -97,8 +97,13 @@ export function EditProfileForm({
   }
 
   return (
-    <main className="mx-auto max-w-md p-6">
-      <h1 className="mb-6 font-serif text-3xl font-bold">Edit profile</h1>
+    <section aria-labelledby="edit-profile-heading">
+      <h2
+        id="edit-profile-heading"
+        className="mb-4 font-serif text-2xl font-semibold"
+      >
+        Profile
+      </h2>
       <form
         aria-label="Edit profile"
         onSubmit={handleSubmit}
@@ -175,6 +180,6 @@ export function EditProfileForm({
         )}
         {submitting && <p className="text-sm text-neutral-500">Saving…</p>}
       </form>
-    </main>
+    </section>
   );
 }

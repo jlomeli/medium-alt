@@ -6,6 +6,8 @@ import { ClapFactory } from "./factories/clap.factory";
 import { CommentFactory } from "./factories/comment.factory";
 import { ImageFactory } from "./factories/image.factory";
 import { MailpitClient } from "./clients/mailpit.client";
+import { PendingEmailChangeFactory } from "./factories/pending-email-change.factory";
+import { createLoggedInApi } from "./loginAs";
 
 /**
  * The medium-alt Playwright fixture layer.
@@ -31,6 +33,16 @@ type Fixtures = {
   imageFactory: ImageFactory;
   testUser: CreatedUser;
   loggedInPage: Page;
+  /**
+   * Same shape as `loggedInPage` — a fresh user, an authed browser
+   * page — plus the created user's attrs (password especially). Use
+   * this over `loggedInPage` in tests that need to type the current
+   * password (change-password) or assert on the current email
+   * (change-email). Callers that only need the authed page should
+   * keep using `loggedInPage`.
+   */
+  loggedInUser: { page: Page; user: CreatedUser };
+  pendingEmailChangeFactory: PendingEmailChangeFactory;
   mailpit: MailpitClient;
 };
 
@@ -145,6 +157,25 @@ export const test = base.extend<Fixtures>({
     await use(page);
 
     await context.close();
+  },
+
+  loggedInUser: async ({ browser, baseURL }, use) => {
+    // Same handshake as `loggedInPage` but exposes the created user's
+    // attrs (password, email) alongside the browser page — the shape
+    // change-password / change-email tests need to type "current
+    // password" and assert on "current email." Uses `createLoggedInApi`
+    // so the CSRF dance stays in one place.
+    const { user, context } = await createLoggedInApi(browser, baseURL);
+    const page = await context.newPage();
+    await use({ page, user });
+    await context.close();
+  },
+
+  pendingEmailChangeFactory: async ({}, use) => {
+    // Context-free — the factory takes an authed `APIRequestContext`
+    // per call (typically `loggedInUser.page.request`) so the same
+    // fixture works across arbitrary sessions.
+    await use(new PendingEmailChangeFactory());
   },
 
   mailpit: async ({}, use) => {

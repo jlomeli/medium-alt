@@ -33,6 +33,11 @@ model User {
   accounts            Account[]
   sessions            Session[]
   passwordResetTokens PasswordResetToken[]
+  // Pending email change — see docs/specs/account-security.md § Data
+  // model delta. Optional 1:1 by `userId @unique` on the child. Only
+  // one pending change per user at a time; a second POST /api/me/email
+  // REPLACES the row via upsert (invalidates the previous token).
+  pendingEmailChange  PendingEmailChange?
   articles            Article[]
   uploads             Upload[]
   // Follow — see docs/specs/follow.md.
@@ -236,6 +241,26 @@ model Comment {
 
   @@index([articleId, createdAt, id])
   @@index([authorId])
+}
+
+// Email-change flow — see docs/specs/account-security.md § Data model
+// delta. Single-use hashed token, 1-hour TTL, one pending change per
+// user (enforced by `userId @unique`). A second POST /api/me/email
+// upserts the row: rotates `tokenHash` + `expiresAt`, invalidates the
+// previous token. On confirm the row is deleted (either happy path
+// swap or 409 in-use) in the same transaction as the User.email swap.
+// Reuses the same sha256 primitive from `lib/auth/reset-token.ts` —
+// one hashing convention across the auth surface.
+model PendingEmailChange {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newEmail  String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }
 
 // Password-reset flow — see docs/specs/auth.md. `tokenHash` is sha256(raw);
