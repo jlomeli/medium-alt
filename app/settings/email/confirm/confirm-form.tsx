@@ -50,8 +50,16 @@ export function ConfirmEmailChangeForm({ token }: { token: string }) {
         setStatus({ kind: "in-use" });
         return;
       }
-      // Everything else collapses to invalid — spec § Change email —
-      // confirm merges unknown / expired / reused / malformed.
+      // 5xx is a server-side hiccup, not a token verdict — surface as
+      // `network` so the user knows to retry rather than seeing "your
+      // link is invalid" and giving up on a good token.
+      if (res.status >= 500) {
+        setStatus({ kind: "network" });
+        return;
+      }
+      // Everything else (400 / 401 / unexpected 4xx) collapses to
+      // invalid — spec § Change email — confirm merges unknown /
+      // expired / reused / malformed.
       setStatus({ kind: "invalid" });
     } catch {
       setStatus({ kind: "network" });
@@ -66,7 +74,11 @@ export function ConfirmEmailChangeForm({ token }: { token: string }) {
         Confirm email change
       </h1>
 
-      {status.kind === "idle" && (
+      {/* Form stays visible on `network` too — a 5xx / fetch failure
+          isn't a verdict on the token, so the user should be able to
+          click again without reloading. `invalid` / `in-use` / `success`
+          are terminal outcomes that unmount the form. */}
+      {(status.kind === "idle" || status.kind === "network") && (
         <form
           aria-label="Confirm email change"
           onSubmit={handleSubmit}
@@ -84,6 +96,11 @@ export function ConfirmEmailChangeForm({ token }: { token: string }) {
             Confirm email change
           </button>
           {submitting && <p className="text-sm text-neutral-500">Confirming…</p>}
+          {status.kind === "network" && (
+            <p role="alert" className="text-sm text-red-600">
+              Something went wrong on our side. Please try again.
+            </p>
+          )}
         </form>
       )}
 
@@ -113,11 +130,6 @@ export function ConfirmEmailChangeForm({ token }: { token: string }) {
         </p>
       )}
 
-      {status.kind === "network" && (
-        <p role="alert" className="text-sm text-red-600">
-          Couldn&rsquo;t reach the server. Please try again.
-        </p>
-      )}
     </main>
   );
 }

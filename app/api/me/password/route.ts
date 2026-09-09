@@ -89,10 +89,25 @@ export async function POST(req: Request) {
   }
 
   const passwordHash = await hashPassword(newPassword);
-  await db.user.update({
-    where: { id: user.id },
+  // Optimistic-concurrency guard: the argon2id hash we're about to
+  // overwrite must still be the one we verified against. Argon2 hashing
+  // takes ~100-250ms; if a concurrent request (another device, a
+  // password-reset confirm) rotated the hash inside that window, our
+  // update would silently clobber the newer credential. The
+  // `passwordHash` predicate makes exactly one caller win — the loser
+  // surfaces the same generic "currentPassword invalid" the wrong-
+  // current branch above uses. From the loser's perspective the
+  // password they typed is no longer the current one, which is true.
+  const claim = await db.user.updateMany({
+    where: { id: user.id, passwordHash: user.passwordHash },
     data: { passwordHash },
   });
+  if (claim.count !== 1) {
+    return NextResponse.json(
+      { error: { field: "currentPassword", code: "invalid" } },
+      { status: 400 },
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }

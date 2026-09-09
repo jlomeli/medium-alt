@@ -751,6 +751,15 @@ const emailChangeInUseSchema = z.object({
     code: z.literal("in-use"),
   }),
 });
+// The account routes shape their 401 as `{ error: { code:
+// "unauthenticated" } }` — nested, symmetric with their 4xx envelope.
+// The top-level `unauthenticatedSchema` (declared way above) is a
+// flat `{ error: "unauthenticated" }` string; existing consumers of
+// /api/me + article routes rely on that shape, so a local schema
+// keeps the doc accurate without a cross-cutting migration.
+const nestedUnauthenticatedSchema = z.object({
+  error: z.object({ code: z.literal("unauthenticated") }),
+});
 
 registerRoute({
   method: "post",
@@ -768,7 +777,7 @@ registerRoute({
       description: "Wrong current password, weak new password, or same-as-current.",
       schema: fieldErrorSchema,
     },
-    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
   },
 });
 
@@ -793,7 +802,7 @@ registerRoute({
       description: "Malformed input, or `same-as-current`.",
       schema: fieldErrorSchema,
     },
-    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
   },
 });
 
@@ -813,7 +822,7 @@ registerRoute({
       description: "No pending change to resend.",
       schema: noPendingErrorSchema,
     },
-    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
   },
 });
 
@@ -828,7 +837,7 @@ registerRoute({
   tags: ["account"],
   responses: {
     "204": { description: "Pending change cancelled (or was never pending)." },
-    "401": { description: "No session cookie.", schema: unauthenticatedSchema },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
   },
 });
 

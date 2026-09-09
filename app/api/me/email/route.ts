@@ -34,7 +34,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const { newEmail } = parsed.data;
+  // Normalize once at the boundary — every downstream check
+  // (same-as-current, anti-enumeration lookup, pending-row write,
+  // eventual confirm) then compares apples to apples. Emails are
+  // case-insensitive per RFC 5321 in practice for consumer providers;
+  // storing a mixed-case swap-target would let "Alice@x.io" land as a
+  // login identifier that a subsequent `alice@x.io` login wouldn't
+  // match under Prisma's case-sensitive @unique.
+  const newEmail = parsed.data.newEmail.toLowerCase();
 
   const me = await db.user.findUnique({
     where: { id: session.user.id },
@@ -49,7 +56,9 @@ export async function POST(req: Request) {
 
   // Same-as-current: reject with a distinguishable 400. This is not an
   // enumeration oracle — the caller already knows their own email.
-  if (newEmail.toLowerCase() === me.email.toLowerCase()) {
+  // `me.email` isn't normalized on write elsewhere in the codebase, so
+  // still lowercase it here for the comparison only.
+  if (newEmail === me.email.toLowerCase()) {
     return NextResponse.json(
       {
         error: {

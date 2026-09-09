@@ -28,8 +28,14 @@ test.describe("@regression change password", () => {
     await editPage.password.submit();
 
     await expect(editPage.password.form.getByText("Password changed.")).toBeVisible();
-    // Session still authenticated — the account menu (signed-in-only affordance)
-    // is still visible without any navigation.
+
+    // Reload before the session assertion — the account menu was
+    // rendered by the page load BEFORE the password rotation, so its
+    // visibility after submit only proves "the DOM didn't change,"
+    // not "the JWT is still accepted." A fresh navigation re-runs
+    // `auth()` server-side; if the session had been invalidated the
+    // header would drop back to the signed-out shape.
+    await page.reload();
     await expect(header.accountMenuButton).toBeVisible();
   });
 

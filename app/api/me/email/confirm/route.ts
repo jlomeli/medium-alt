@@ -29,8 +29,14 @@ export async function POST(req: Request) {
     );
   }
 
+  // Cache the hashed token — used as both the lookup key AND the
+  // atomic-claim predicate below so a rotation between find and delete
+  // (concurrent /resend or a fresh /request) cannot silently consume
+  // the fresh row with stale-token authorization.
+  const tokenHash = hashToken(parsed.data.token);
+
   const row = await db.pendingEmailChange.findUnique({
-    where: { tokenHash: hashToken(parsed.data.token) },
+    where: { tokenHash },
     select: { id: true, userId: true, newEmail: true, expiresAt: true },
   });
 
@@ -57,12 +63,14 @@ export async function POST(req: Request) {
   // same commit-then-swap rule applies in reverse here.
   try {
     const swapped = await db.$transaction(async (tx) => {
-      // Atomic claim: delete-by-id guards the "two concurrent confirms
-      // with the same token" race. If a competing request already
-      // deleted the row, `deleteMany.count === 0` and we bail out with
-      // the generic invalid response.
+      // Atomic claim: gate on BOTH `id` and `tokenHash` so a
+      // concurrent /resend that rotated `tokenHash` on the same row
+      // (id unchanged, upsert-in-place) cannot be consumed with the
+      // stale token we authorized against. `deleteMany.count === 0`
+      // means either the row was deleted OR the token rotated — same
+      // generic invalid response either way.
       const claim = await tx.pendingEmailChange.deleteMany({
-        where: { id: row.id },
+        where: { id: row.id, tokenHash },
       });
       if (claim.count !== 1) return null;
 
@@ -94,7 +102,13 @@ export async function POST(req: Request) {
       // address will always collide). Delete the row outside the tx so
       // /me/edit clears the pending banner and the user is prompted
       // for a different address.
-      await db.pendingEmailChange.deleteMany({ where: { id: row.id } });
+      //
+      // Same token-hash predicate as the inner claim: if the row was
+      // rotated between our find and this cleanup, the rotated row
+      // belongs to a fresh request the user just made — don't reap it.
+      await db.pendingEmailChange.deleteMany({
+        where: { id: row.id, tokenHash },
+      });
       return NextResponse.json(
         { error: { field: "email", code: "in-use" } },
         { status: 409 },
