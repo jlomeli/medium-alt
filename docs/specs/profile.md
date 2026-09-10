@@ -84,10 +84,12 @@ Each becomes one Playwright test. Grouped by journey.
   wiring lands (image uploads for article headers). Until then `User.image`
   stays untouched and the UI shows initials.
 - **Email change.** Requires a verify-new-email flow that's out of scope
-  for v1.
+  for v1. Promoted in Phase 2 — see
+  [`account-security.md`](account-security.md) § Change email.
 - **Password change from the profile page.** Password-reset request →
   confirm is the supported path; a separate "change password while
-  logged in" surface is a Phase-2 exercise.
+  logged in" surface is a Phase-2 exercise. Promoted in Phase 2 — see
+  [`account-security.md`](account-security.md) § Change password.
 - **Delete account.**
 - **Following / followers counts.** Belongs with the Follow feature.
 

@@ -27,6 +27,9 @@ import path from "node:path";
 const EXCLUDED_PATHS = new Set<string>([
   // Dev/E2E-only seam, guarded by NODE_ENV + VERCEL_ENV + E2E env vars.
   "/api/test/password-reset/expire",
+  // Dev/E2E-only seam, same guard shape as the password-reset expire
+  // route above — see docs/specs/account-security.md § Testing seams.
+  "/api/test/email-change/expire",
   // E2E-only upload-serve stub, gated on `E2E=1` at the handler (404 in
   // every other env). See docs/specs/articles-images.md § Testing seams.
   "/api/__test-uploads/{key}",

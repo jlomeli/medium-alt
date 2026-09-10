@@ -20,6 +20,11 @@ import {
 } from "@/lib/validation/auth";
 import { updateMeSchema } from "@/lib/validation/profile";
 import {
+  changePasswordSchema,
+  changeEmailSchema,
+  confirmEmailChangeSchema,
+} from "@/lib/validation/account";
+import {
   createArticleSchema,
   updateArticleSchema,
 } from "@/lib/validation/article";
@@ -721,6 +726,146 @@ registerRoute({
       description:
         "Unknown comment id, or the id doesn't belong to the given article.",
       schema: notFoundSchema,
+    },
+  },
+});
+
+// -------- Account security (change password / change email) --------
+//
+// See docs/specs/account-security.md § API surface. Five endpoints:
+// password change + the email-change round-trip (request / resend /
+// cancel / confirm). The confirm endpoint's `mixed` auth (session
+// optional; the token itself is authorization) mirrors
+// `POST /api/password-reset/confirm`.
+
+const emailChangePendingSchema = z.object({ pending: z.literal(true) });
+const emailChangeConfirmResponseSchema = z.object({
+  email: z.string().email(),
+});
+const noPendingErrorSchema = z.object({
+  error: z.object({ code: z.literal("no-pending") }),
+});
+const emailChangeInUseSchema = z.object({
+  error: z.object({
+    field: z.literal("email"),
+    code: z.literal("in-use"),
+  }),
+});
+// The account routes shape their 401 as `{ error: { code:
+// "unauthenticated" } }` — nested, symmetric with their 4xx envelope.
+// The top-level `unauthenticatedSchema` (declared way above) is a
+// flat `{ error: "unauthenticated" }` string; existing consumers of
+// /api/me + article routes rely on that shape, so a local schema
+// keeps the doc accurate without a cross-cutting migration.
+const nestedUnauthenticatedSchema = z.object({
+  error: z.object({ code: z.literal("unauthenticated") }),
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/me/password",
+  summary: "Change the signed-in user's password.",
+  description:
+    "Verifies `currentPassword` via the same argon2id helper as `POST /api/login`, " +
+    "rejects `same-as-current`, rehashes `newPassword`, and updates. JWT session is " +
+    "preserved — signed off `User.id`, which does not change on a password rotation.",
+  tags: ["account"],
+  request: changePasswordSchema,
+  responses: {
+    "200": { description: "Password updated.", schema: okSchema },
+    "400": {
+      description: "Wrong current password, weak new password, or same-as-current.",
+      schema: fieldErrorSchema,
+    },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/me/email",
+  summary: "Request an email-address change (verify-new-email round-trip).",
+  description:
+    "Upserts a `PendingEmailChange` row (rotating the token + expiry), commits, " +
+    "then dispatches a 1-hour verification link to the NEW address. `User.email` " +
+    "does not change until the link is used. Anti-enumeration: an address already " +
+    "in use by another account returns the same `202 { pending: true }` shape " +
+    "without creating a row or dispatching.",
+  tags: ["account"],
+  request: changeEmailSchema,
+  responses: {
+    "202": {
+      description: "Pending change accepted (indistinguishable from the anti-enumeration branch).",
+      schema: emailChangePendingSchema,
+    },
+    "400": {
+      description: "Malformed input, or `same-as-current`.",
+      schema: fieldErrorSchema,
+    },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/me/email/resend",
+  summary: "Re-issue the verification email for the caller's pending change.",
+  description:
+    "Rotates the pending row's token + expiry and re-dispatches to the same " +
+    "address. 404 `no-pending` when no row exists — the UI only surfaces the " +
+    "button when a row is present; the 404 is defense-in-depth against " +
+    "tab-race cancellation.",
+  tags: ["account"],
+  responses: {
+    "204": { description: "Verification re-dispatched." },
+    "404": {
+      description: "No pending change to resend.",
+      schema: noPendingErrorSchema,
+    },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/me/email/cancel",
+  summary: "Cancel the caller's pending email change.",
+  description:
+    "Deletes the caller's `PendingEmailChange` row, if any. Idempotent — a " +
+    "missing row is a 204 no-op, not a 404, so a tab-race concurrent " +
+    "confirm/cancel doesn't surface a spurious error.",
+  tags: ["account"],
+  responses: {
+    "204": { description: "Pending change cancelled (or was never pending)." },
+    "401": { description: "No session cookie.", schema: nestedUnauthenticatedSchema },
+  },
+});
+
+registerRoute({
+  method: "post",
+  path: "/api/me/email/confirm",
+  summary: "Consume a verify-new-email token and swap the login identifier.",
+  description:
+    "Public — no session required; the token is the authorization (same shape " +
+    "as `POST /api/password-reset/confirm`). Success swaps `User.email` and " +
+    "deletes the pending row inside one transaction. Malformed, expired, and " +
+    "reused tokens all collapse to 400 `invalid`. If the target address was " +
+    "claimed by another account since the verification was sent, responds 409 " +
+    "and clears the pending row so the user is prompted for a different address.",
+  tags: ["account"],
+  request: confirmEmailChangeSchema,
+  responses: {
+    "200": {
+      description: "Email swapped.",
+      schema: emailChangeConfirmResponseSchema,
+    },
+    "400": {
+      description: "Token invalid, expired, or already consumed.",
+      schema: fieldErrorSchema,
+    },
+    "409": {
+      description: "Target address is now in use by another account.",
+      schema: emailChangeInUseSchema,
     },
   },
 });
