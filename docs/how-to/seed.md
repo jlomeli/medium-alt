@@ -17,14 +17,22 @@ The seed refuses to run with `NODE_ENV=production`.
 Two users, five published articles, and one draft. Documented once
 here so you don't have to fish through the seed file.
 
-| Email                     | Username | Password       | Name       |
-| ------------------------- | -------- | -------------- | ---------- |
-| `alice@medium-alt.test`   | `alice`  | `Password123!` | Alice Ng   |
-| `bob@medium-alt.test`     | `bob`    | `Password123!` | Bob Reyes  |
+| Email                          | Username     | Password       | Name       |
+| ------------------------------ | ------------ | -------------- | ---------- |
+| `alice@medium-alt.test`        | `alice`      | `Password123!` | Alice Ng   |
+| `bob@medium-alt.test`          | `bob`        | `Password123!` | Bob Reyes  |
+| `power-user@medium-alt.test`   | `power-user` | `Password123!` | Power User |
 
 Alice has three published articles + one draft; Bob has two published
 articles. See `prisma/seeds/baseline.ts` for the exact titles and
 slugs.
+
+**Power user + orbiters** (slice 9): `power-user` and 25 deterministic
+`orbiter-01`…`orbiter-25` accounts are wired into a bidirectional
+follow graph so `/profiles/power-user/{followers,following}` each
+render 25 rows on a fresh seed — enough to demo the pagination
+`Next` link at the default limit of 20. All orbiters share the same
+password as the leads.
 
 **Tags** (slice 5): the seeded articles carry `writing`, `intro`,
 `editor`, and `reading`, spread across authors so a fresh

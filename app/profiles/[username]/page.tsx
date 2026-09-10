@@ -4,10 +4,15 @@ import { db } from "@/lib/db";
 import { auth } from "@/lib/auth/config";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
 import { FollowButton } from "@/components/profile/FollowButton";
+import { FollowCountsRow } from "@/components/profile/FollowCountsRow";
 import { ClapCount } from "@/components/claps/ClapCount";
 import { CommentCount } from "@/components/comments/CommentCount";
 import { listPublishedArticlesByUsername } from "@/lib/articles/service";
-import { isFollowing } from "@/lib/follows/service";
+import {
+  countFollowers,
+  countFollowing,
+  isFollowing,
+} from "@/lib/follows/service";
 
 /**
  * `/profiles/:username` — public profile.
@@ -54,11 +59,26 @@ export default async function PublicProfilePage({
   // Same code path as GET /api/users/{username}/articles — the on-page
   // render and the public API can't drift. See docs/specs/articles-crud.md
   // § Public author listing.
-  const articles = (await listPublishedArticlesByUsername(username)) ?? [];
+  //
+  // Follower / following counts are DB-derived per render (slice 9 —
+  // docs/specs/follow-lists.md § Data model delta) and fired in
+  // parallel with the article-listing round-trip so the profile page
+  // doesn't grow a serial hop.
+  const [articlesResult, followerCount, followingCount] = await Promise.all([
+    listPublishedArticlesByUsername(username),
+    countFollowers(user.id),
+    countFollowing(user.id),
+  ]);
+  const articles = articlesResult ?? [];
 
   return (
     <main className="mx-auto max-w-2xl p-6">
       <ProfileHeader name={user.name} username={user.username} bio={user.bio} />
+      <FollowCountsRow
+        username={user.username ?? ""}
+        followerCount={followerCount}
+        followingCount={followingCount}
+      />
       <div className="mt-6 flex items-center gap-3">
         {isOwner ? (
           <Link

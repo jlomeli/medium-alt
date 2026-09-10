@@ -180,6 +180,34 @@ const BOB_ARTICLES: readonly SeedArticle[] = [
   },
 ];
 
+/**
+ * Slice 9 — follow-lists pagination extras. `power-user` and its
+ * ~25 orbiters are deterministic pagination fodder so the
+ * pagination test (`follow-list-pagination.spec.ts`) can hit
+ * `/profiles/power-user/followers?limit=20` and assert on the
+ * `Next` link without inline factory calls. Named `orbiter-<n>` with
+ * two-digit zero-padding so `git diff` on a fixture change is
+ * legible. Ownership + article counts intentionally zero — these
+ * accounts exist purely to fill the follow graph.
+ */
+const POWER_ORBITER_COUNT = 25;
+const POWER_USER_EMAIL = "power-user@medium-alt.test";
+const POWER_USER_USERNAME = "power-user";
+
+const POWER_ORBITERS: readonly SeedUser[] = Array.from(
+  { length: POWER_ORBITER_COUNT },
+  (_, i) => {
+    const n = String(i + 1).padStart(2, "0");
+    return {
+      email: `orbiter-${n}@medium-alt.test`,
+      username: `orbiter-${n}`,
+      name: `Orbiter ${n}`,
+      password: "Password123!",
+      articles: [],
+    } satisfies SeedUser;
+  },
+);
+
 const USERS: readonly SeedUser[] = [
   {
     email: "alice@medium-alt.test",
@@ -195,6 +223,14 @@ const USERS: readonly SeedUser[] = [
     password: "Password123!",
     articles: BOB_ARTICLES,
   },
+  {
+    email: POWER_USER_EMAIL,
+    username: POWER_USER_USERNAME,
+    name: "Power User",
+    password: "Password123!",
+    articles: [],
+  },
+  ...POWER_ORBITERS,
 ];
 
 // -----------------------------------------------------------------------
@@ -226,6 +262,17 @@ const BASELINE_FOLLOWS: readonly {
   followingEmail: string;
 }[] = [
   { followerEmail: "bob@medium-alt.test", followingEmail: "alice@medium-alt.test" },
+  // Slice 9 — the power-user's inbound + outbound edges. Every
+  // `orbiter-NN` both follows and is followed by `power-user`, so
+  // `/profiles/power-user/{followers,following}` each host
+  // POWER_ORBITER_COUNT rows on a fresh seed. Generated inline via
+  // `flatMap` so a change to POWER_ORBITER_COUNT flows through
+  // automatically; the seed loop's `findUnique + create`
+  // idempotency handles duplicates on rerun.
+  ...POWER_ORBITERS.flatMap((o) => [
+    { followerEmail: o.email, followingEmail: POWER_USER_EMAIL },
+    { followerEmail: POWER_USER_EMAIL, followingEmail: o.email },
+  ]),
 ];
 
 /**

@@ -168,6 +168,27 @@ const publicProfileSchema = z.object({
   username: z.string().nullable(),
   name: z.string().nullable(),
   bio: z.string().nullable(),
+  // Slice 9 — follower + following counts, DB-derived per render.
+  // See docs/specs/follow-lists.md § API contract.
+  followerCount: z.number().int().nonnegative(),
+  followingCount: z.number().int().nonnegative(),
+});
+
+// Slice 9 — per-row shape for the two follow-list endpoints. See
+// docs/specs/follow-lists.md § New shape. `viewerFollows` / `isSelf`
+// are optional at the schema level because they're stripped from
+// anonymous responses.
+const publicUserSummarySchema = z.object({
+  username: z.string(),
+  name: z.string().nullable(),
+  bioExcerpt: z.string().nullable(),
+  viewerFollows: z.boolean().optional(),
+  isSelf: z.boolean().optional(),
+});
+
+const followListResponseSchema = z.object({
+  items: z.array(publicUserSummarySchema),
+  nextCursor: z.string().nullable(),
 });
 
 const unauthenticatedSchema = z.object({ error: z.literal("unauthenticated") });
@@ -562,6 +583,42 @@ registerRoute({
     "204": { description: "Unfollowed (or was never following)." },
     "401": { description: "No session cookie.", schema: unauthenticatedSchema },
     "404": { description: "Unknown username.", schema: notFoundSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/users/{username}/followers",
+  summary: "List accounts that follow the given user.",
+  description:
+    "Public — no session required. Cursor pagination on " +
+    "`(createdAt DESC, followerId DESC)`; `nextCursor` is `null` when " +
+    "the returned page is the last. `viewerFollows` / `isSelf` per-row " +
+    "fields appear only when the caller is signed in — anonymous " +
+    "responses strip both so the shape can't leak session state. " +
+    "Unknown username → 404. Zero followers → 200 with an empty items " +
+    "array (matches the empty-feed convention).",
+  tags: ["follow"],
+  responses: {
+    "200": { description: "One page of followers.", schema: followListResponseSchema },
+    "400": { description: "Malformed cursor / out-of-range limit.", schema: fieldErrorSchema },
+    "404": { description: "Unknown username.", schema: fieldErrorSchema },
+  },
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/users/{username}/following",
+  summary: "List accounts the given user follows.",
+  description:
+    "Mirror of `/followers`. Cursor pagination on " +
+    "`(createdAt DESC, followingId DESC)`. Same viewer-block rules, " +
+    "same empty-set semantics, same 404 on unknown username.",
+  tags: ["follow"],
+  responses: {
+    "200": { description: "One page of accounts followed.", schema: followListResponseSchema },
+    "400": { description: "Malformed cursor / out-of-range limit.", schema: fieldErrorSchema },
+    "404": { description: "Unknown username.", schema: fieldErrorSchema },
   },
 });
 

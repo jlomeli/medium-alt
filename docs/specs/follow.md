@@ -185,10 +185,12 @@ Each becomes one Playwright test. Grouped by journey.
 - **Followers / following lists.** No `/profiles/[username]/followers`
   or `/following` routes. A signed-in reader can rediscover who they
   follow by browsing to a profile and seeing the Unfollow state; the
-  reverse ("who follows me") is Phase 2.
+  reverse ("who follows me") is Phase 2. **Promoted in Phase 2 — see
+  [`follow-lists.md`](follow-lists.md).**
 - **Follow counts.** No "127 followers" number anywhere in the UI or
   API in v1. Aggregation on a live count column is a write-path cost
-  worth deferring until there's a real UX asking for it.
+  worth deferring until there's a real UX asking for it. **Promoted
+  in Phase 2 — see [`follow-lists.md`](follow-lists.md).**
 - **Follow-a-tag.** Only user-follows-user. A `TagFollow` model would
   be a superset of the tag-filter feature from slice 5 and belongs
   to its own slice if we ever want it.
