@@ -1,0 +1,53 @@
+/**
+ * `GET /api/users/{username}/followers` — list accounts that follow
+ * the given user. See docs/specs/follow-lists.md § API contract.
+ *
+ * Public — no session required. The `viewerFollows` / `isSelf`
+ * per-row fields are present only when the caller carries a session
+ * (both are computed server-side from the session id).
+ *
+ * Same cursor + limit validation as `/api/feed`; unknown username →
+ * 404 with the field-scoped envelope (`{ error: { field: "username",
+ * code: "not-found" } }`).
+ */
+import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth/config";
+import {
+  DEFAULT_FOLLOW_LIST_LIMIT,
+  followListQuerySchema,
+} from "@/lib/validation/follow-lists";
+import { listFollowers } from "@/lib/follows/service";
+
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ username: string }> },
+) {
+  const { username } = await params;
+
+  const url = new URL(req.url);
+  const raw: Record<string, string> = {};
+  for (const [k, v] of url.searchParams.entries()) raw[k] = v;
+  const parsed = followListQuerySchema.safeParse(raw);
+  if (!parsed.success) {
+    const first = parsed.error.issues[0]!;
+    const field = (first.path[0] ?? "query") as string;
+    return NextResponse.json(
+      { error: { field, code: "invalid", message: first.message } },
+      { status: 400 },
+    );
+  }
+
+  const session = await auth();
+  const result = await listFollowers(username, {
+    limit: parsed.data.limit ?? DEFAULT_FOLLOW_LIST_LIMIT,
+    cursor: parsed.data.cursor,
+    viewerId: session?.user?.id,
+  });
+  if (result === null) {
+    return NextResponse.json(
+      { error: { field: "username", code: "not-found" } },
+      { status: 404 },
+    );
+  }
+  return NextResponse.json(result);
+}
